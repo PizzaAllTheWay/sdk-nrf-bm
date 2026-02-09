@@ -8,13 +8,13 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
 
-#define STORAGE_NODE DT_NODELABEL(storage0_partition)
+#define STORAGE_NODE		DT_NODELABEL(storage0_partition)
 #define BM_ZMS_PARTITION_OFFSET DT_REG_ADDR(STORAGE_NODE)
-#define BM_ZMS_PARTITION_SIZE DT_REG_SIZE(STORAGE_NODE)
+#define BM_ZMS_PARTITION_SIZE	DT_REG_SIZE(STORAGE_NODE)
 
 #define IP_ADDRESS_ID 1
 #define KEY_VALUE_ID  0xbeefdead
-#define CNT_ID        2
+#define CNT_ID	      2
 #define LONG_DATA_ID  3
 
 #include <bm/softdevice_handler/nrf_sdh.h>
@@ -166,8 +166,7 @@ int main(void)
 		.offset = BM_ZMS_PARTITION_OFFSET,
 		.sector_size = CONFIG_APP_BM_ZMS_SECTOR_SIZE,
 		.sector_count = (BM_ZMS_PARTITION_SIZE / CONFIG_APP_BM_ZMS_SECTOR_SIZE),
-		.evt_handler = bm_zms_sample_handler
-	};
+		.evt_handler = bm_zms_sample_handler};
 
 	/* Let's mount and clear the existing storage partition to reset the conditions. */
 	rc = bm_zms_mount(&fs, &config);
@@ -256,8 +255,7 @@ int main(void)
 		if (rc > 0) {
 			/* item was found, show it */
 			LOG_INF("Id: %d", LONG_DATA_ID);
-			LOG_HEXDUMP_INF(longarray, sizeof(longarray),
-				      "Longarray:");
+			LOG_HEXDUMP_INF(longarray, sizeof(longarray), "Longarray:");
 		}
 		/* Rewrite the entry even if we found it */
 		LOG_INF("Adding Longarray at id %d", LONG_DATA_ID);

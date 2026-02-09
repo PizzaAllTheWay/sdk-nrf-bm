@@ -8,6 +8,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
+#include <board-config.h>
 
 LOG_MODULE_REGISTER(app, CONFIG_APP_TIMER_LOG_LEVEL);
 
@@ -98,7 +99,10 @@ int main(void)
 		goto idle;
 	}
 
-	LOG_INF("Timers initialized");
+	nrf_gpio_cfg_output(BOARD_PIN_LED_0);
+	nrf_gpio_pin_write(BOARD_PIN_LED_0, BOARD_LED_ACTIVE_STATE);
+
+	LOG_INF("Peripherals Timer sample initialized");
 
 idle:
 	while (true) {

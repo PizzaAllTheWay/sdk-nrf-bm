@@ -149,6 +149,13 @@ int main(void)
 		LOG_ERR("bm_timer_start failed, err %d", err);
 	}
 
+#if defined(CONFIG_APP_LPUARTE_INIT_LED)
+	nrf_gpio_cfg_output(BOARD_PIN_LED_0);
+	nrf_gpio_pin_write(BOARD_PIN_LED_0, BOARD_LED_ACTIVE_STATE);
+#endif
+
+	LOG_INF("Peripherals LPUARTE sample initialized");
+
 idle:
 	while (true) {
 		log_flush();

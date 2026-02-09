@@ -69,6 +69,11 @@ int main(void)
 	nrfx_pwm_simple_playback(&pwm_instance, &seq, CONFIG_APP_PWM_PLAYBACK_COUNT,
 				 NRFX_PWM_FLAG_LOOP);
 
+	nrf_gpio_cfg_output(BOARD_PIN_LED_0);
+	nrf_gpio_pin_write(BOARD_PIN_LED_0, BOARD_LED_ACTIVE_STATE);
+
+	LOG_INF("Peripherals PWM sample initialized");
+
 idle:
 	while (true) {
 		log_flush();
