@@ -66,8 +66,8 @@ static void on_conn_params_evt(const struct ble_conn_params_evt *evt)
 
 	switch (evt->evt_type) {
 	case BLE_CONN_PARAMS_EVT_REJECTED:
-		nrf_err = sd_ble_gap_disconnect(evt->conn_handle,
-						BLE_HCI_CONN_INTERVAL_UNACCEPTABLE);
+		nrf_err =
+			sd_ble_gap_disconnect(evt->conn_handle, BLE_HCI_CONN_INTERVAL_UNACCEPTABLE);
 		if (nrf_err) {
 			LOG_ERR("Disconnect failed on conn params update rejection, nrf_error %#x",
 				nrf_err);
@@ -152,7 +152,7 @@ int main(void)
 	LOG_INF("Advertising as %s", CONFIG_BLE_ADV_NAME);
 
 	nrf_gpio_pin_write(BOARD_PIN_LED_0, BOARD_LED_ACTIVE_STATE);
-	LLOG_INF("BLE Radio Notification sample initialized");
+	LOG_INF("BLE Radio Notification sample initialized");
 
 idle:
 	while (true) {
