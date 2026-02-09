@@ -123,6 +123,8 @@ Samples
    * :ref:`ble_hids_mouse_sample`
    * :ref:`ble_hids_keyboard_sample`
 
+* Aligned LED and button behavior and documentation across samples
+
 Bluetooth LE samples
 --------------------
 
