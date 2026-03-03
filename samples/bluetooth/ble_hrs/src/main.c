@@ -71,16 +71,10 @@ void battery_level_meas_timeout_handler(void *context)
 		return;
 	}
 
-	if (!bas_notif_enabled) {
-		return;
-	}
-
-	nrf_err = ble_bas_battery_level_update(&ble_bas, conn_handle, battery_level);
+	nrf_err = ble_bas_battery_level_update(&ble_bas, conn_handle, bas_notif_enabled, battery_level);
 	if (nrf_err) {
-		/* Ignore if not in a connection or notifications disabled in CCCD. */
-		if (nrf_err != NRF_ERROR_NOT_FOUND && nrf_err != NRF_ERROR_INVALID_STATE) {
-			LOG_ERR("Failed to update battery level, nrf_error %#x", nrf_err);
-		}
+		LOG_ERR("Failed to update battery level, nrf_error %#x", nrf_err);
+		return;
 	}
 }
 
@@ -386,6 +380,32 @@ static void pm_evt_handler(const struct pm_evt *p_evt)
 	switch (p_evt->evt_id) {
 	case PM_EVT_PEERS_DELETE_SUCCEEDED:
 		advertising_start(false);
+		break;
+	case PM_EVT_LOCAL_DB_CACHE_APPLIED:
+		/*
+		* Bonded peers have their CCCD values stored in flash. When a bonded
+		* peer reconnects, the peer manager restores these CCCD values in the
+		* GATT database automatically. However, our local notification flags
+		* (e.g., bas_notif_enabled) are not updated by this process on startup,
+		* so we read the restored CCCD values and update the flags manually.
+		*/
+		uint32_t nrf_err;
+		ble_gatts_value_t val = {
+			.p_value = (uint8_t *)&(uint16_t){0},
+			.len = sizeof(uint16_t),
+		};
+
+		nrf_err = sd_ble_gatts_value_get(p_evt->conn_handle,
+						ble_hrs.hrm_handles.cccd_handle, &val);
+		if (!nrf_err) {
+			hrs_notif_enabled = is_notification_enabled(val.p_value);
+		}
+
+		nrf_err = sd_ble_gatts_value_get(p_evt->conn_handle,
+						ble_bas.battery_level_handles.cccd_handle, &val);
+		if (!nrf_err) {
+			bas_notif_enabled = is_notification_enabled(val.p_value);
+		}
 		break;
 	default:
 		break;

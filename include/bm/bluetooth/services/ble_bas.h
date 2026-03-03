@@ -187,14 +187,16 @@ struct ble_bas {
  */
 uint32_t ble_bas_init(struct ble_bas *bas, const struct ble_bas_config *bas_config);
 
-/**
+ /**
  * @brief Update battery level.
  *
- * If this instance has notifications enabled, this function will notify the updated value
- * of the battery level to the peer with given @p conn_handle.
+ * If @p notify is true, this function will update the GATT database and notify the
+ * updated value of the battery level to the peer with given @p conn_handle.
+ * If @p notify is false, only the GATT database is updated.
  *
  * @param bas Battery service.
  * @param conn_handle Connection handle.
+ * @param notify If true, notify the connected peer.
  * @param battery_level Battery level (in percent of full capacity).
  *
  * @retval NRF_SUCCESS On success.
@@ -205,21 +207,7 @@ uint32_t ble_bas_init(struct ble_bas *bas, const struct ble_bas_config *bas_conf
  *	   - @ref sd_ble_gatts_hvx()
  */
 uint32_t ble_bas_battery_level_update(struct ble_bas *bas, uint16_t conn_handle,
-				      uint8_t battery_level);
-
-/**
- * @brief Notify battery level.
- *
- * @param bas Battery service.
- * @param conn_handle Connection handle.
- *
- * @retval NRF_SUCCESS On success.
- * @retval NRF_ERROR_NULL If @p bas is @c NULL.
- * @return In addition, this function may return any error
- *	   returned by the following SoftDevice functions:
- *	   - @ref sd_ble_gatts_hvx()
- */
-uint32_t ble_bas_battery_level_notify(struct ble_bas *bas, uint16_t conn_handle);
+				      bool notify, uint8_t battery_level);
 
 #ifdef __cplusplus
 }

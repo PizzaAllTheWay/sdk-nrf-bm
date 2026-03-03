@@ -170,12 +170,8 @@ uint32_t ble_bas_init(struct ble_bas *bas, const struct ble_bas_config *cfg)
 }
 
 uint32_t ble_bas_battery_level_update(
-	struct ble_bas *bas, uint16_t conn_handle, uint8_t battery_level)
+	struct ble_bas *bas, uint16_t conn_handle, bool notify, uint8_t battery_level)
 {
-	uint32_t nrf_err;
-	ble_gatts_value_t gatts_value = {0};
-	ble_gatts_hvx_params_t hvx = {0};
-
 	if (!bas) {
 		return NRF_ERROR_NULL;
 	}
@@ -185,60 +181,40 @@ uint32_t ble_bas_battery_level_update(
 		return NRF_SUCCESS;
 	}
 
-	/* Update database */
-	gatts_value.len = sizeof(uint8_t);
-	gatts_value.p_value = &battery_level;
+	uint32_t nrf_err;
 
-	nrf_err = sd_ble_gatts_value_set(BLE_CONN_HANDLE_INVALID,
-					 bas->battery_level_handles.value_handle, &gatts_value);
-	if (nrf_err) {
-		LOG_ERR("Failed to update battery level, nrf_error %#x", nrf_err);
-		return nrf_err;
+	if (notify) {
+		/* Update battery level in the GATT database and notify the connected peer */
+		ble_gatts_hvx_params_t hvx = {0};
+
+		hvx.handle = bas->battery_level_handles.value_handle;
+		hvx.type   = BLE_GATT_HVX_NOTIFICATION;
+		hvx.p_len  = &(uint16_t){sizeof(uint8_t)};
+		hvx.p_data = &battery_level;
+
+		nrf_err = sd_ble_gatts_hvx(conn_handle, &hvx);
+		if (nrf_err) {
+			LOG_ERR("Failed to notify battery level, nrf_error %#x", nrf_err);
+			return nrf_err;
+		}
+	} else {
+		/* Update battery level in the GATT database without notifying connected peer */
+		ble_gatts_value_t gatts_value = {0};
+
+		gatts_value.len = sizeof(uint8_t);
+		gatts_value.p_value = &battery_level;
+
+		nrf_err = sd_ble_gatts_value_set(BLE_CONN_HANDLE_INVALID,
+						bas->battery_level_handles.value_handle, &gatts_value);
+		if (nrf_err) {
+			LOG_ERR("Failed to update battery level, nrf_error %#x", nrf_err);
+			return nrf_err;
+		}
 	}
 
+	/* Cache the new battery level locally */
 	LOG_DBG("Battery level: %d%%", battery_level);
 	bas->battery_level = battery_level;
-
-	if (!bas->can_notify) {
-		/* We are done */
-		return NRF_SUCCESS;
-	}
-
-	/* Notify */
-	hvx.handle = bas->battery_level_handles.value_handle;
-	hvx.type = BLE_GATT_HVX_NOTIFICATION;
-	hvx.offset = gatts_value.offset;
-	hvx.p_len = &gatts_value.len;
-	hvx.p_data = gatts_value.p_value;
-
-	nrf_err = sd_ble_gatts_hvx(conn_handle, &hvx);
-	if (nrf_err) {
-		LOG_ERR("Failed to notify battery level, nrf_error %#x", nrf_err);
-		return nrf_err;
-	}
-
-	return NRF_SUCCESS;
-}
-
-uint32_t ble_bas_battery_level_notify(struct ble_bas *bas, uint16_t conn_handle)
-{
-	uint32_t nrf_err;
-	ble_gatts_hvx_params_t hvx = {0};
-
-	if (!bas) {
-		return NRF_ERROR_NULL;
-	}
-
-	hvx.type = BLE_GATT_HVX_NOTIFICATION;
-	hvx.handle = bas->battery_level_handles.value_handle;
-	hvx.p_len = &(uint16_t){sizeof(bas->battery_level)};
-	hvx.p_data = &bas->battery_level;
-
-	nrf_err = sd_ble_gatts_hvx(conn_handle, &hvx);
-	if (nrf_err) {
-		LOG_ERR("Failed to notify battery level, nrf_error %#x", nrf_err);
-		return nrf_err;
-	}
 
 	return NRF_SUCCESS;
 }
