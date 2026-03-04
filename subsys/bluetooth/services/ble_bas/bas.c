@@ -13,6 +13,14 @@
 
 LOG_MODULE_REGISTER(ble_bas, CONFIG_BLE_BAS_LOG_LEVEL);
 
+static struct ble_bas_client_context *ble_bas_client_context_get(struct ble_bas *bas,
+								 uint16_t conn_handle)
+{
+	const int idx = nrf_sdh_ble_idx_get(conn_handle);
+
+	return ((idx >= 0) ? &bas->contexts[idx] : NULL);
+}
+
 static uint32_t battery_level_char_add(struct ble_bas *bas, const struct ble_bas_config *cfg)
 {
 	ble_uuid_t char_uuid = {
@@ -94,11 +102,24 @@ static void on_write(struct ble_bas *bas, const ble_gatts_evt_t *gatts_evt)
 		return;
 	}
 
+	struct ble_bas_client_context *ctx;
+	ctx = ble_bas_client_context_get(bas, gatts_evt->conn_handle);
+	if (ctx == NULL) {
+		LOG_ERR("Could not fetch bas context for connection handle %#x", gatts_evt->conn_handle);
+		bas_evt.evt_type = BLE_BAS_EVT_ERROR;
+		bas_evt.error.reason = NRF_ERROR_NOT_FOUND;
+		if (bas->evt_handler != NULL) {
+			bas->evt_handler(bas, &bas_evt);
+		}
+	}
+
 	bas_evt.conn_handle = gatts_evt->conn_handle;
 	if (is_notification_enabled(gatts_evt->params.write.data)) {
 		bas_evt.evt_type = BLE_BAS_EVT_NOTIFICATION_ENABLED;
+		ctx->is_notification_enabled = true;
 	} else {
 		bas_evt.evt_type = BLE_BAS_EVT_NOTIFICATION_DISABLED;
+		ctx->is_notification_enabled = false;
 	}
 
 	LOG_INF("Battery level notifications %sabled for peer %#x",
@@ -117,7 +138,6 @@ void ble_bas_on_ble_evt(const ble_evt_t *ble_evt, void *bas)
 	case BLE_GATTS_EVT_WRITE:
 		on_write(bas, &ble_evt->evt.gatts_evt);
 		break;
-
 	default:
 		break;
 	}
@@ -169,8 +189,31 @@ uint32_t ble_bas_init(struct ble_bas *bas, const struct ble_bas_config *cfg)
 	return NRF_SUCCESS;
 }
 
+uint32_t ble_bas_cccd_sync(struct ble_bas *bas, uint16_t conn_handle)
+{
+	if (!bas) {
+		return NRF_ERROR_NULL;
+	}
+
+	struct ble_bas_client_context *ctx = ble_bas_client_context_get(bas, conn_handle);
+	if (ctx == NULL) {
+		return NRF_ERROR_NOT_FOUND;
+	}
+
+	ble_gatts_value_t val = {
+		.p_value = (uint8_t *)&(uint16_t){0},
+		.len = sizeof(uint16_t),
+	};
+	uint32_t nrf_err = sd_ble_gatts_value_get(conn_handle, bas->battery_level_handles.cccd_handle, &val);
+	if (!nrf_err) {
+		ctx->is_notification_enabled = is_notification_enabled(val.p_value);
+	}
+
+	return nrf_err;
+}
+
 uint32_t ble_bas_battery_level_update(
-	struct ble_bas *bas, uint16_t conn_handle, bool notify, uint8_t battery_level)
+	struct ble_bas *bas, uint16_t conn_handle, uint8_t battery_level)
 {
 	if (!bas) {
 		return NRF_ERROR_NULL;
@@ -181,9 +224,16 @@ uint32_t ble_bas_battery_level_update(
 		return NRF_SUCCESS;
 	}
 
+	struct ble_bas_client_context *ctx;
+	ctx = ble_bas_client_context_get(bas, conn_handle);
+	if (ctx == NULL) {
+		LOG_ERR("Could not fetch bas context for connection handle %#x", conn_handle);
+		return NRF_ERROR_NOT_FOUND;
+	}
+
 	uint32_t nrf_err;
 
-	if (notify) {
+	if (ctx->is_notification_enabled) {
 		/* Update battery level in the GATT database and notify the connected peer */
 		ble_gatts_hvx_params_t hvx = {0};
 

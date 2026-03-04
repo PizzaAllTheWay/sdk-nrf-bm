@@ -55,7 +55,6 @@ static struct bm_timer rr_interval_timer;
 static struct bm_timer sensor_contact_timer;
 
 static bool hrs_notif_enabled;
-static bool bas_notif_enabled;
 
 void battery_level_meas_timeout_handler(void *context)
 {
@@ -71,7 +70,7 @@ void battery_level_meas_timeout_handler(void *context)
 		return;
 	}
 
-	nrf_err = ble_bas_battery_level_update(&ble_bas, conn_handle, bas_notif_enabled, battery_level);
+	nrf_err = ble_bas_battery_level_update(&ble_bas, conn_handle, battery_level);
 	if (nrf_err) {
 		LOG_ERR("Failed to update battery level, nrf_error %#x", nrf_err);
 		return;
@@ -290,10 +289,7 @@ static void ble_bas_evt_handler(struct ble_bas *bas, const struct ble_bas_evt *e
 {
 	switch (evt->evt_type) {
 	case BLE_BAS_EVT_NOTIFICATION_ENABLED:
-		bas_notif_enabled = true;
-		break;
 	case BLE_BAS_EVT_NOTIFICATION_DISABLED:
-		bas_notif_enabled = false;
 		break;
 	default:
 		break;
@@ -383,28 +379,24 @@ static void pm_evt_handler(const struct pm_evt *p_evt)
 		break;
 	case PM_EVT_LOCAL_DB_CACHE_APPLIED:
 		/*
-		* Bonded peers have their CCCD values stored in flash. When a bonded
-		* peer reconnects, the peer manager restores these CCCD values in the
-		* GATT database automatically. However, our local notification flags
-		* (e.g., bas_notif_enabled) are not updated by this process on startup,
-		* so we read the restored CCCD values and update the flags manually.
-		*/
+		 * Peer manager restores CCCDs from flash on reconnect with bonded devices
+		 * But local notification flags aren't updated
+		 * Read CCCDs and sync manually
+		 */
 		uint32_t nrf_err;
 		ble_gatts_value_t val = {
 			.p_value = (uint8_t *)&(uint16_t){0},
 			.len = sizeof(uint16_t),
 		};
 
-		nrf_err = sd_ble_gatts_value_get(p_evt->conn_handle,
-						ble_hrs.hrm_handles.cccd_handle, &val);
+		nrf_err = sd_ble_gatts_value_get(p_evt->conn_handle, ble_hrs.hrm_handles.cccd_handle, &val);
 		if (!nrf_err) {
 			hrs_notif_enabled = is_notification_enabled(val.p_value);
 		}
 
-		nrf_err = sd_ble_gatts_value_get(p_evt->conn_handle,
-						ble_bas.battery_level_handles.cccd_handle, &val);
-		if (!nrf_err) {
-			bas_notif_enabled = is_notification_enabled(val.p_value);
+		nrf_err = ble_bas_cccd_sync(&ble_bas, p_evt->conn_handle);
+		if (nrf_err) {
+			LOG_ERR("Battery Service CCCD sync failed, nrf_error %#x", nrf_err);
 		}
 		break;
 	default:
