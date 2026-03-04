@@ -71,6 +71,7 @@ void battery_level_meas_timeout_handler(void *context)
 	}
 
 	nrf_err = ble_bas_battery_level_update(&ble_bas, conn_handle, battery_level);
+
 	if (nrf_err) {
 		LOG_ERR("Failed to update battery level, nrf_error %#x", nrf_err);
 		return;
@@ -392,11 +393,6 @@ static void pm_evt_handler(const struct pm_evt *p_evt)
 		nrf_err = sd_ble_gatts_value_get(p_evt->conn_handle, ble_hrs.hrm_handles.cccd_handle, &val);
 		if (!nrf_err) {
 			hrs_notif_enabled = is_notification_enabled(val.p_value);
-		}
-
-		nrf_err = ble_bas_cccd_sync(&ble_bas, p_evt->conn_handle);
-		if (nrf_err) {
-			LOG_ERR("Battery Service CCCD sync failed, nrf_error %#x", nrf_err);
 		}
 		break;
 	default:

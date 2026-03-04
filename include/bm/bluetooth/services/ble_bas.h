@@ -61,16 +61,6 @@ enum ble_bas_evt_type {
 };
 
 /**
- * @brief BAS client context structure holding host-related state.
- */
-struct ble_bas_client_context {
-	/**
-	 * @brief Indicate if the peer has enabled notification of the battery characteristic.
-	 */
-	bool is_notification_enabled;
-};
-
-/**
  * @brief Battery service event.
  */
 struct  ble_bas_evt {
@@ -179,10 +169,6 @@ struct ble_bas {
 	 * @brief Whether notifications of battery level changes are supported.
 	 */
 	bool can_notify;
-	/**
-	 * @brief Link context with handles of all current connections and its context.
-	 */
-	struct ble_bas_client_context contexts[CONFIG_NRF_SDH_BLE_TOTAL_LINK_COUNT];
 };
 
 /**
@@ -202,34 +188,12 @@ struct ble_bas {
 uint32_t ble_bas_init(struct ble_bas *bas, const struct ble_bas_config *bas_config);
 
 /**
- * @brief Sync notification flag with the restored CCCD value from flash.
- *
- * @details When a bonded peer reconnects, the peer manager restores the CCCD
- * values in the GATT database from flash. However, the local notification flag
- * in the client context is not updated automatically. This function reads the
- * restored CCCD and syncs the flag so that @ref ble_bas_battery_level_update
- * can correctly decide whether to notify the peer.
- *
- * Call this from @c PM_EVT_LOCAL_DB_CACHE_APPLIED.
- *
- * @param bas Battery service.
- * @param conn_handle Connection handle of the reconnected bonded peer.
- *
- * @retval NRF_SUCCESS On success.
- * @retval NRF_ERROR_NULL If @p bas is @c NULL.
- * @retval NRF_ERROR_NOT_FOUND If no client context exists for @p conn_handle.
- * @return In addition, this function may return any error
- *	   returned by the following SoftDevice function:
- *	   - @ref sd_ble_gatts_value_get()
- */
-uint32_t ble_bas_cccd_sync(struct ble_bas *bas, uint16_t conn_handle);
-
-/**
  * @brief Update battery level.
  *
- * Updates the battery level in the GATT database. If the peer with the given
- * @p conn_handle has notifications enabled (CCCD written), a notification is
- * sent automatically. Otherwise, only the GATT database value is updated.
+ * @details Updates the battery level in the GATT database and sends notification
+ * depending on connection. Checks if the peer with the given @p conn_handle has
+ * notifications enabled (CCCD written). If its enabled notification is sent
+ * automatically. Otherwise, only the GATT database value is updated.
  *
  * @param bas Battery service.
  * @param conn_handle Connection handle.
