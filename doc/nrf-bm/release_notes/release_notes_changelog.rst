@@ -98,7 +98,9 @@ No changes since the latest nRF Connect SDK Bare Metal release.
 Bluetooth LE samples
 --------------------
 
-No changes since the latest nRF Connect SDK Bare Metal release.
+* Added:
+
+   * The :ref:`ble_device_name_sample` sample.
 
 NFC samples
 -----------
