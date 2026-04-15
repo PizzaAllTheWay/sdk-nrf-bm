@@ -10,8 +10,10 @@
 #include <bm/softdevice_handler/nrf_sdh.h>
 #include <bm/softdevice_handler/nrf_sdh_ble.h>
 #include <bm/bluetooth/ble_adv.h>
+#include <bm/bluetooth/ble_common.h>
 #include <bm/storage/bm_storage.h>
 #include <bm/fs/bm_zms.h>
+
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -19,92 +21,74 @@
 
 #include <board-config.h>
 
-/* Storage partition configuration from devicetree */
-#define STORAGE_NODE           DT_NODELABEL(storage0_partition)
-#define STORAGE_OFFSET         DT_REG_ADDR(STORAGE_NODE)
-#define STORAGE_SIZE           DT_REG_SIZE(STORAGE_NODE)
-
-/* ZMS item ID used to store the device name */
-#define DEVICE_NAME_STORAGE_ID 1
-
 LOG_MODULE_REGISTER(sample, LOG_LEVEL_INF);
 
-BLE_ADV_DEF(ble_adv); /* BLE advertising instance */
+/* Storage partition configuration from devicetree. */
+#define STORAGE_NODE   DT_NODELABEL(storage0_partition)
+#define STORAGE_OFFSET DT_REG_ADDR(STORAGE_NODE)
+#define STORAGE_SIZE   DT_REG_SIZE(STORAGE_NODE)
+
+/* ZMS item ID used to store the device name. */
+#define DEVICE_NAME_STORAGE_ID 1
+
+/* BLE advertising instance. */
+BLE_ADV_DEF(ble_adv);
 
 static uint16_t conn_handle = BLE_CONN_HANDLE_INVALID;
 
-/* Global so the BLE event handler can call ble_adv_data_update() to refresh the advertising packet
- * with the new device name when a peer writes it.
- * Without adv config being global, the advertised name would remain stale until reboot.
- */
-static void ble_adv_evt_handler(struct ble_adv *adv, const struct ble_adv_evt *adv_evt);
-static struct ble_adv_config adv_cfg = {
-	.conn_cfg_tag = CONFIG_NRF_SDH_BLE_CONN_TAG,
-	.evt_handler  = ble_adv_evt_handler,
-	.adv_data = {
-		.name_type = BLE_ADV_DATA_FULL_NAME,
-		.flags     = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE,
-	},
-};
-
-/* ZMS filesystem instance */
+/* ZMS filesystem instance. */
 static struct bm_zms_fs fs;
-static volatile bool zms_ready;
+static volatile bool zms_mounted;
 
-/* Buffer to hold device name between event handler and async ZMS write */
+/* Set device name sec open to allow updating the name without any security. */
+ble_gap_conn_sec_mode_t device_name_sec = BLE_GAP_CONN_SEC_MODE_OPEN;
+/* Buffer to hold device name between event handler and async ZMS write. */
 static uint8_t pending_name[BLE_GAP_DEVNAME_MAX_LEN];
 
-static void zms_evt_handler(const struct bm_zms_evt *evt)
-{
-	switch (evt->evt_type) {
-	case BM_ZMS_EVT_MOUNT:
-		if (evt->result) {
-			LOG_ERR("ZMS mount failed: %d", evt->result);
-		} else {
-			LOG_INF("BM ZMS mounted");
-		}
-		zms_ready = true;
-		break;
-
-	case BM_ZMS_EVT_WRITE:
-		if (evt->id == DEVICE_NAME_STORAGE_ID) {
-			if (evt->result) {
-				LOG_ERR("Device name storage write failed: %d", evt->result);
-			} else {
-				LOG_INF("Device name persisted to storage");
-			}
-		}
-		break;
-
-	default:
-		break;
-	}
-}
+static const struct ble_adv_data adv_data = {
+	.name_type = BLE_ADV_DATA_FULL_NAME,
+	.flags = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE,
+};
 
 static bool device_name_save(const uint8_t *name, uint16_t len)
 {
-	ssize_t bytes_queued = bm_zms_write(&fs, DEVICE_NAME_STORAGE_ID, name, len);
+	/* Persist to storage.
+	 * ZMS queues the write but doesn't copy the data, it only stores a pointer.
+	 * Since write_evt->data is freed when this handler returns,
+	 * must copy it to a buffer that outlives the event.
+	 */
+	memcpy(pending_name, name, len);
 
-	if (bytes_queued < 0) {
-		return false; /* Write failed */
+	ssize_t written = bm_zms_write(&fs, DEVICE_NAME_STORAGE_ID, pending_name, len);
+	if (written < 0) {
+		/* Write failed. */
+		return false;
 	}
-	return true; /* Name saved successfully */
+
+	/* Name saved successfully. */
+	return true;
 }
 
-static bool device_name_load(uint8_t *buf, uint16_t buf_size, uint16_t *len)
+static bool device_name_load(uint8_t *buf, size_t buf_size, uint16_t *len)
 {
 	ssize_t bytes_read = bm_zms_read(&fs, DEVICE_NAME_STORAGE_ID, buf, buf_size);
 
 	if (bytes_read <= 0) {
-		return false; /* No name found or read failed */
+		/* No name found or read failed. */
+		return false;
 	}
+
 	*len = (uint16_t)bytes_read;
-	return true; /* Name loaded, *len set to bytes read */
+
+	/* Name loaded, *len set to bytes read. */
+	return true;
 }
 
 static void on_ble_evt(const ble_evt_t *evt, void *ctx)
 {
 	uint32_t nrf_err;
+	const ble_gatts_evt_write_t *write_evt = &evt->evt.gatts_evt.params.write;
+	bool saved;
 
 	switch (evt->header.evt_id) {
 	case BLE_GAP_EVT_CONNECTED:
@@ -126,7 +110,7 @@ static void on_ble_evt(const ble_evt_t *evt, void *ctx)
 		break;
 
 	case BLE_GAP_EVT_SEC_PARAMS_REQUEST:
-		/* Pairing not supported */
+		/* Pairing not supported. */
 		nrf_err = sd_ble_gap_sec_params_reply(evt->evt.gap_evt.conn_handle,
 						      BLE_GAP_SEC_STATUS_PAIRING_NOT_SUPP, NULL,
 						      NULL);
@@ -137,7 +121,7 @@ static void on_ble_evt(const ble_evt_t *evt, void *ctx)
 
 	case BLE_GATTS_EVT_SYS_ATTR_MISSING:
 		LOG_INF("BLE_GATTS_EVT_SYS_ATTR_MISSING");
-		/* No system attributes have been stored */
+		/* No system attributes have been stored. */
 		nrf_err = sd_ble_gatts_sys_attr_set(conn_handle, NULL, 0, 0);
 		if (nrf_err) {
 			LOG_ERR("Failed to set system attributes, nrf_error %#x", nrf_err);
@@ -151,34 +135,23 @@ static void on_ble_evt(const ble_evt_t *evt, void *ctx)
 		 * When a match is found, update the SoftDevice immediately
 		 * and save to storage so it persists across reboots.
 		 */
-		const ble_gatts_evt_write_t *write_evt = &evt->evt.gatts_evt.params.write;
-		ble_gap_conn_sec_mode_t device_name_sec;
-		bool saved;
 
 		if (write_evt->uuid.uuid == BLE_UUID_GAP_CHARACTERISTIC_DEVICE_NAME &&
 		    write_evt->uuid.type == BLE_UUID_TYPE_BLE) {
 			/* Update SoftDevice GAP name immediately and refresh
 			 * advertising data so the new name is used on next broadcast.
 			 */
-			BLE_GAP_CONN_SEC_MODE_SET_OPEN(&device_name_sec);
 			sd_ble_gap_device_name_set(&device_name_sec, write_evt->data,
 						   write_evt->len);
-			ble_adv_data_update(&ble_adv, &adv_cfg.adv_data, NULL);
+			ble_adv_data_update(&ble_adv, &adv_data, NULL);
 
-			/* Persist to storage.
-			 * ZMS queues the write but doesn't copy the data, it only stores a pointer.
-			 * Since write_evt->data is freed when this handler returns,
-			 * must copy it to a buffer that outlives the event.
-			 */
-			memcpy(pending_name, write_evt->data, write_evt->len);
-			saved = device_name_save(pending_name, write_evt->len);
+			saved = device_name_save(write_evt->data, write_evt->len);
 			if (!saved) {
 				LOG_ERR("Failed to save device name to storage");
 				LOG_HEXDUMP_ERR(write_evt->data, write_evt->len, "Unsaved name");
 			}
 
-			LOG_INF("Device name updated (%u bytes)", write_evt->len);
-			LOG_HEXDUMP_INF(write_evt->data, write_evt->len, "New name");
+			LOG_INF("Device name updated to %.*s", write_evt->len, write_evt->data);
 		}
 		break;
 	}
@@ -196,11 +169,40 @@ static void ble_adv_evt_handler(struct ble_adv *adv, const struct ble_adv_evt *a
 	}
 }
 
+static void zms_evt_handler(const struct bm_zms_evt *evt)
+{
+	switch (evt->evt_type) {
+	case BM_ZMS_EVT_MOUNT:
+		if (evt->result) {
+			LOG_ERR("BM ZMS mount failed, err %d", evt->result);
+		} else {
+			LOG_INF("BM ZMS mounted");
+		}
+		zms_mounted = true;
+		break;
+	case BM_ZMS_EVT_WRITE:
+		if (evt->id == DEVICE_NAME_STORAGE_ID) {
+			if (evt->result) {
+				LOG_ERR("Device name storage write failed, err %d", evt->result);
+			} else {
+				LOG_INF("Device name persisted to storage");
+			}
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 int main(void)
 {
 	int err;
 	uint32_t nrf_err;
-	int rc;
+	static struct ble_adv_config adv_cfg = {
+		.conn_cfg_tag = CONFIG_NRF_SDH_BLE_CONN_TAG,
+		.evt_handler  = ble_adv_evt_handler,
+		.adv_data = adv_data,
+	};
 	struct bm_zms_fs_config bm_zms_cfg = {
 		.offset       = STORAGE_OFFSET,
 		.sector_size  = CONFIG_SAMPLE_BM_ZMS_SECTOR_SIZE,
@@ -209,13 +211,20 @@ int main(void)
 		.storage_api  = &bm_storage_sd_api,
 	};
 	bool name_found;
-	uint8_t saved_name[BLE_GAP_DEVNAME_MAX_LEN];
-	uint16_t saved_len = 0;
-	ble_gap_conn_sec_mode_t device_name_sec;
+	uint8_t device_name[BLE_GAP_DEVNAME_MAX_LEN] = CONFIG_SAMPLE_BLE_DEVICE_NAME;
+	uint16_t device_name_len = strlen(CONFIG_SAMPLE_BLE_DEVICE_NAME);
 
 	LOG_INF("BLE GAP Device Name sample started");
 
-	/* SoftDevice setup */
+	/* LED setup */
+	nrf_gpio_cfg_output(BOARD_PIN_LED_0);
+	nrf_gpio_cfg_output(BOARD_PIN_LED_1);
+	nrf_gpio_pin_write(BOARD_PIN_LED_0, !BOARD_LED_ACTIVE_STATE);
+	nrf_gpio_pin_write(BOARD_PIN_LED_1, !BOARD_LED_ACTIVE_STATE);
+
+	LOG_INF("LEDs enabled");
+
+	/* SoftDevice setup. */
 	err = nrf_sdh_enable_request();
 	if (err) {
 		LOG_ERR("Failed to enable SoftDevice, err %d", err);
@@ -233,55 +242,32 @@ int main(void)
 	LOG_INF("Bluetooth enabled");
 
 	/* BM ZMS (Bare Metal Zephyr Memory Storage) setup.
-	 * Mount ZMS and wait for completion, must finish before we can read the stored name
+	 * Mount ZMS and wait for completion, must finish before we can read the stored name.
 	 */
-	rc = bm_zms_mount(&fs, &bm_zms_cfg);
-	if (rc) {
-		LOG_ERR("Storage Init failed, rc %d", rc);
+	LOG_INF("BM ZMS mounting");
+	err = bm_zms_mount(&fs, &bm_zms_cfg);
+	if (err) {
+		LOG_ERR("Storage Init failed, err %d", err);
 		goto idle;
 	}
 
-	LOG_INF("BM ZMS mounting scheduled");
-
-	while (!zms_ready) {
+	while (!zms_mounted) {
 		k_cpu_idle();
 	}
-	zms_ready = false;
 
-	/* GAP Device Name setup.
-	 * Try loading a previously saved name from storage.
-	 * If none exists, fall back to the default configured name.
-	 * The name is then set in the SoftDevice with open read/write permissions
-	 * so peers can both read and update it over BLE.
-	 */
-	name_found = device_name_load(saved_name, sizeof(saved_name), &saved_len);
-	if (name_found) {
-		LOG_INF("Loaded saved device name");
-		LOG_HEXDUMP_INF(saved_name, saved_len, "Name");
-	} else {
-		LOG_INF("No saved name, using default");
-		saved_len = strlen(CONFIG_SAMPLE_BLE_DEVICE_NAME);
-		memcpy(saved_name, CONFIG_SAMPLE_BLE_DEVICE_NAME, saved_len);
+	name_found = device_name_load(device_name, sizeof(device_name), &device_name_len);
+	if (!name_found) {
+		LOG_INF("No local name stored, using default");
 	}
 
-	BLE_GAP_CONN_SEC_MODE_SET_OPEN(&device_name_sec);
-	nrf_err = sd_ble_gap_device_name_set(&device_name_sec, saved_name, saved_len);
+	nrf_err = sd_ble_gap_device_name_set(&device_name_sec, device_name,
+					     (uint16_t)device_name_len);
 	if (nrf_err) {
 		LOG_ERR("Failed to set device name, nrf_error %#x", nrf_err);
 		goto idle;
 	}
 
-	LOG_INF("Device name set to: %.*s", saved_len, saved_name);
-
-	/* LED setup */
-	nrf_gpio_cfg_output(BOARD_PIN_LED_0);
-	nrf_gpio_cfg_output(BOARD_PIN_LED_1);
-	nrf_gpio_pin_write(BOARD_PIN_LED_0, !BOARD_LED_ACTIVE_STATE);
-	nrf_gpio_pin_write(BOARD_PIN_LED_1, !BOARD_LED_ACTIVE_STATE);
-
-	LOG_INF("LEDs enabled");
-
-	/* Advertising setup */
+	/* Advertising setup. */
 	nrf_err = ble_adv_init(&ble_adv, &adv_cfg);
 	if (nrf_err) {
 		LOG_ERR("Failed to initialize BLE advertising, nrf_error %#x", nrf_err);
@@ -290,14 +276,14 @@ int main(void)
 
 	LOG_INF("Advertising configured");
 
-	/* Start Advertising */
+	/* Start Advertising. */
 	nrf_err = ble_adv_start(&ble_adv, BLE_ADV_MODE_FAST);
 	if (nrf_err) {
 		LOG_ERR("Adv start failed: %#x", nrf_err);
 		goto idle;
 	}
 
-	LOG_INF("Advertising as %.*s", saved_len, saved_name);
+	LOG_INF("Advertising as %.*s", device_name_len, device_name);
 
 	nrf_gpio_pin_write(BOARD_PIN_LED_0, BOARD_LED_ACTIVE_STATE);
 	LOG_INF("BLE GAP Device Name sample initialized");
