@@ -63,22 +63,58 @@ extern "C" {
 #define BOARD_CONSOLE_UARTE_PIN_CTS NRF_PIN_PORT_TO_PIN_NUMBER(7, 1)
 #endif
 
+/* Application SPI master configuration */
+#ifndef BOARD_APP_SPIM_INST
+#define BOARD_APP_SPIM_INST NRF_SPIM21
+#endif
+
+#ifndef BOARD_APP_SPIM_PIN_SCK
+#define BOARD_APP_SPIM_PIN_SCK NRF_PIN_PORT_TO_PIN_NUMBER(11, 1)
+#endif
+#ifndef BOARD_APP_SPIM_PIN_MOSI
+#define BOARD_APP_SPIM_PIN_MOSI NRF_PIN_PORT_TO_PIN_NUMBER(12, 1)
+#endif
+#ifndef BOARD_APP_SPIM_PIN_MISO
+#define BOARD_APP_SPIM_PIN_MISO NRF_PIN_PORT_TO_PIN_NUMBER(13, 1) /* Shared with Button 0. */
+#endif
+#ifndef BOARD_APP_SPIM_PIN_CSN
+#define BOARD_APP_SPIM_PIN_CSN NRF_PIN_PORT_TO_PIN_NUMBER(14, 1) /* Shared with LED 3. */
+#endif
+
+/* Application SPI slave configuration */
+#ifndef BOARD_APP_SPIS_INST
+#define BOARD_APP_SPIS_INST NRF_SPIS30
+#endif
+
+#ifndef BOARD_APP_SPIS_PIN_SCK
+#define BOARD_APP_SPIS_PIN_SCK NRF_PIN_PORT_TO_PIN_NUMBER(0, 0)
+#endif
+#ifndef BOARD_APP_SPIS_PIN_MOSI
+#define BOARD_APP_SPIS_PIN_MOSI NRF_PIN_PORT_TO_PIN_NUMBER(1, 0)
+#endif
+#ifndef BOARD_APP_SPIS_PIN_MISO
+#define BOARD_APP_SPIS_PIN_MISO NRF_PIN_PORT_TO_PIN_NUMBER(2, 0)
+#endif
+#ifndef BOARD_APP_SPIS_PIN_CSN
+#define BOARD_APP_SPIS_PIN_CSN NRF_PIN_PORT_TO_PIN_NUMBER(3, 0)
+#endif
+
 /* Application UART configuration */
 #ifndef BOARD_APP_UARTE_INST
 #define BOARD_APP_UARTE_INST NRF_UARTE30
 #endif
 
 #ifndef BOARD_APP_UARTE_PIN_TX
-#define BOARD_APP_UARTE_PIN_TX NRF_PIN_PORT_TO_PIN_NUMBER(0, 0)
+#define BOARD_APP_UARTE_PIN_TX NRF_PIN_PORT_TO_PIN_NUMBER(0, 0) /* Shared with SPI slave SCK. */
 #endif
 #ifndef BOARD_APP_UARTE_PIN_RX
-#define BOARD_APP_UARTE_PIN_RX NRF_PIN_PORT_TO_PIN_NUMBER(1, 0)
+#define BOARD_APP_UARTE_PIN_RX NRF_PIN_PORT_TO_PIN_NUMBER(1, 0) /* Shared with SPI slave MOSI. */
 #endif
 #ifndef BOARD_APP_UARTE_PIN_RTS
-#define BOARD_APP_UARTE_PIN_RTS NRF_PIN_PORT_TO_PIN_NUMBER(2, 0)
+#define BOARD_APP_UARTE_PIN_RTS NRF_PIN_PORT_TO_PIN_NUMBER(2, 0) /* Shared with SPI slave MISO. */
 #endif
 #ifndef BOARD_APP_UARTE_PIN_CTS
-#define BOARD_APP_UARTE_PIN_CTS NRF_PIN_PORT_TO_PIN_NUMBER(3, 0)
+#define BOARD_APP_UARTE_PIN_CTS NRF_PIN_PORT_TO_PIN_NUMBER(3, 0) /* Shared with SPI slave CSN. */
 #endif
 
 /* Application LPUART configuration */
@@ -86,17 +122,20 @@ extern "C" {
 #define BOARD_APP_LPUARTE_INST NRF_UARTE21
 #endif
 
+/* Shared with SPI master SCK. */
 #ifndef BOARD_APP_LPUARTE_PIN_TX
 #define BOARD_APP_LPUARTE_PIN_TX NRF_PIN_PORT_TO_PIN_NUMBER(11, 1)
 #endif
+/* Shared with SPI master MOSI. */
 #ifndef BOARD_APP_LPUARTE_PIN_RX
 #define BOARD_APP_LPUARTE_PIN_RX NRF_PIN_PORT_TO_PIN_NUMBER(12, 1)
 #endif
 #ifndef BOARD_APP_LPUARTE_PIN_REQ
 #define BOARD_APP_LPUARTE_PIN_REQ NRF_PIN_PORT_TO_PIN_NUMBER(4, 0) /* Shared with button 3. */
 #endif
+/* Shared with LED 3 and SPI master CSN. */
 #ifndef BOARD_APP_LPUARTE_PIN_RDY
-#define BOARD_APP_LPUARTE_PIN_RDY NRF_PIN_PORT_TO_PIN_NUMBER(14, 1) /* Shared with LED 3. */
+#define BOARD_APP_LPUARTE_PIN_RDY NRF_PIN_PORT_TO_PIN_NUMBER(14, 1)
 #endif
 
 #ifdef __cplusplus

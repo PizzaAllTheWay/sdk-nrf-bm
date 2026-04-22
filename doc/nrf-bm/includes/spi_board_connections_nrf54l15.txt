@@ -1,0 +1,19 @@
+.. list-table:: nRF54L15 DK — SPIM and SPIS (see :file:`board-config.h` for instance names and overrides).
+   :widths: auto
+   :header-rows: 1
+
+   * - Function
+     - SPIM (master) pin
+     - SPIS (slave) pin
+   * - SCK
+     - P1.11
+     - P0.0
+   * - MOSI
+     - P1.12
+     - P0.1
+   * - MISO
+     - P1.13
+     - P0.2
+   * - CSN
+     - P1.14
+     - P0.3

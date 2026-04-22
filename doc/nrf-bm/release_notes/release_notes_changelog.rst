@@ -380,6 +380,7 @@ Peripheral samples
 ------------------
 
 * Added the :ref:`bm_ppi_sample` sample.
+* Added the :ref:`bm_spi_sample` sample.
 
 * :ref:`bm_lpuarte_sample` sample:
 
