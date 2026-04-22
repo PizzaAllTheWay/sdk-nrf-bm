@@ -1,0 +1,52 @@
+#
+# Copyright (c) 2026 Nordic Semiconductor ASA
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
+menu "SPI sample"
+
+config SAMPLE_SPI_MSG
+	string "Message to send over SPI"
+	default "Hello World!"
+	help
+	  The message that the SPI master sends to the SPI slave when the button is pressed.
+
+choice SAMPLE_SPI_ROLE
+	prompt "SPI role(s) to enable"
+	default SAMPLE_SPI_ROLE_BOTH
+
+config SAMPLE_SPI_ROLE_BOTH
+	bool "Master and Slave"
+	help
+	  Enable both SPI instances (master and slave) on this board.
+
+config SAMPLE_SPI_ROLE_MASTER
+	bool "Master only"
+	help
+	  Enable only the SPI master (SPIM). Use this when talking to an
+	  external SPI slave device or another board running slave-only.
+
+config SAMPLE_SPI_ROLE_SLAVE
+	bool "Slave only"
+	help
+	  Enable only the SPI slave (SPIS). Use this when another board or
+	  host is driving the bus as master.
+
+endchoice
+
+config SAMPLE_SPI_MASTER_ENABLED
+	bool
+	default y if SAMPLE_SPI_ROLE_BOTH || SAMPLE_SPI_ROLE_MASTER
+
+config SAMPLE_SPI_SLAVE_ENABLED
+	bool
+	default y if SAMPLE_SPI_ROLE_BOTH || SAMPLE_SPI_ROLE_SLAVE
+
+module=SAMPLE_SPI
+module-str=SPI Sample
+source "$(ZEPHYR_BASE)/subsys/logging/Kconfig.template.log_config"
+
+endmenu # "SPI sample"
+
+source "Kconfig.zephyr"
