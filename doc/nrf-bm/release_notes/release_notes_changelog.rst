@@ -73,7 +73,10 @@ No changes since the latest nRF Connect SDK Bare Metal release.
 Libraries
 =========
 
-No changes since the latest nRF Connect SDK Bare Metal release.
+
+* :ref:`lib_ble_adv` library:
+
+   * Added the :c:func:`ble_adv_data_manufacturer_data_find` function to locate manufacturer-specific data in an advertising payload and prefix-match it against a target value.
 
 Bluetooth LE Services
 ---------------------
