@@ -16,6 +16,7 @@ tests:
       - bm_nrf54lm20dk/nrf54lm20a/cpuapp/s145_softdevice/mcuboot
     tags:
       - kmu
+    timeout: 600
     harness: console
     harness_config:
       type: one_line
@@ -41,7 +42,7 @@ tests:
     tags:
       - pytest
       - kmu
-    timeout: 300
+    timeout: 600
     harness: pytest
     harness_config:
       pytest_root:

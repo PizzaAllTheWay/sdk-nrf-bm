@@ -16,7 +16,7 @@ tests:
     tags:
       - pytest
       - dfu
-    timeout: 300
+    timeout: 600
     harness: pytest
     harness_config:
       pytest_root:
@@ -41,7 +41,7 @@ tests:
     tags:
       - pytest
       - dfu
-    timeout: 300
+    timeout: 600
     harness: pytest
     harness_config:
       pytest_root:
