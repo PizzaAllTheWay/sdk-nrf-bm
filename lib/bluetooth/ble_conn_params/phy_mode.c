@@ -43,6 +43,32 @@ static struct {
 BUILD_ASSERT(BLE_CONN_PARAMS_PHY_IS_AUTO || BLE_CONN_PARAMS_PHY_HAS_STACK_SUPPORT,
 	     "Invalid PHY config");
 
+static const char *phy_mask_to_str(uint8_t phy_mask)
+{
+	switch (phy_mask) {
+	case BLE_GAP_PHY_AUTO:
+		return "AUTO";
+	case BLE_GAP_PHY_NOT_SET:
+		return "NOT_SET";
+	case BLE_GAP_PHY_1MBPS:
+		return "1M";
+	case BLE_GAP_PHY_2MBPS:
+		return "2M";
+	case BLE_GAP_PHY_CODED:
+		return "CODED";
+	case BLE_GAP_PHY_1MBPS | BLE_GAP_PHY_2MBPS:
+		return "1M|2M";
+	case BLE_GAP_PHY_1MBPS | BLE_GAP_PHY_CODED:
+		return "1M|CODED";
+	case BLE_GAP_PHY_2MBPS | BLE_GAP_PHY_CODED:
+		return "2M|CODED";
+	case BLE_GAP_PHY_1MBPS | BLE_GAP_PHY_2MBPS | BLE_GAP_PHY_CODED:
+		return "1M|2M|CODED";
+	default:
+		return "UNKNOWN";
+	}
+}
+
 static ble_gap_phys_t radio_phy_mode_prepare(ble_gap_phys_t phy_mode)
 {
 	/* Apply app policy on top of what this SoftDevice can support. */
@@ -126,8 +152,9 @@ static void on_radio_phy_mode_update_evt(uint16_t conn_handle, int idx,
 		links[idx].phy_mode_update_pending = false;
 		links[idx].phy_mode.tx_phys = evt->tx_phy;
 		links[idx].phy_mode.rx_phys = evt->rx_phy;
-		LOG_INF("PHY updated for peer %#x, tx %u, rx %u", conn_handle,
-			links[idx].phy_mode.tx_phys, links[idx].phy_mode.rx_phys);
+		LOG_INF("PHY mode selected for peer %#x: tx=%s (%u), rx=%s (%u)", conn_handle,
+			phy_mask_to_str(links[idx].phy_mode.tx_phys), links[idx].phy_mode.tx_phys,
+			phy_mask_to_str(links[idx].phy_mode.rx_phys), links[idx].phy_mode.rx_phys);
 	} else if (evt->status == BLE_HCI_DIFFERENT_TRANSACTION_COLLISION) {
 		/* Retry */
 		links[idx].phy_mode_update_pending = true;
@@ -156,8 +183,11 @@ static void on_radio_phy_mode_update_request_evt(uint16_t conn_handle, int idx,
 {
 	ble_gap_phys_t peer_phys = evt->peer_preferred_phys;
 
-	LOG_INF("Peer %#x requested PHY update to tx %u, rx %u", conn_handle,
-		evt->peer_preferred_phys.tx_phys, evt->peer_preferred_phys.rx_phys);
+	LOG_INF("Peer %#x requested PHY preference mask: tx=%s (%u), rx=%s (%u)", conn_handle,
+		phy_mask_to_str(evt->peer_preferred_phys.tx_phys),
+		evt->peer_preferred_phys.tx_phys,
+		phy_mask_to_str(evt->peer_preferred_phys.rx_phys),
+		evt->peer_preferred_phys.rx_phys);
 
 	/* Respect peer request only within app + SoftDevice allowed masks. */
 	links[idx].phy_mode = radio_phy_mode_prepare(peer_phys);
