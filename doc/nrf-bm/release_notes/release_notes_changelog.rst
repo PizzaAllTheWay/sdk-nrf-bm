@@ -73,7 +73,7 @@ No changes since the latest nRF Connect SDK Bare Metal release.
 Libraries
 =========
 
-No changes since the latest nRF Connect SDK Bare Metal release.
+* **Bluetooth LE Connection Parameters** library: PHY preference enforcement (app mask + stack support), multi-PHY Kconfig and clearer PHY logs.
 
 Bluetooth LE Services
 ---------------------
