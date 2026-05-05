@@ -592,9 +592,13 @@ void test_ble_conn_params_phy_radio_mode_set(void)
 void test_ble_conn_params_phy_radio_mode_set_error_resources(void)
 {
 	uint32_t nrf_err;
-	ble_gap_phys_t phy_config = {
-		.rx_phys = CONFIG_BLE_CONN_PARAMS_PHY,
-		.tx_phys = CONFIG_BLE_CONN_PARAMS_PHY,
+	ble_gap_phys_t phy_fallback = {
+		.rx_phys = (CONFIG_BLE_CONN_PARAMS_PHY == BLE_GAP_PHY_AUTO) ?
+				   BLE_GAP_PHY_1MBPS :
+				   CONFIG_BLE_CONN_PARAMS_PHY,
+		.tx_phys = (CONFIG_BLE_CONN_PARAMS_PHY == BLE_GAP_PHY_AUTO) ?
+				   BLE_GAP_PHY_1MBPS :
+				   CONFIG_BLE_CONN_PARAMS_PHY,
 	};
 	ble_gap_phys_t phy_all = {
 		.rx_phys = BLE_GAP_PHY_1MBPS | BLE_GAP_PHY_2MBPS | BLE_GAP_PHY_CODED,
@@ -611,7 +615,7 @@ void test_ble_conn_params_phy_radio_mode_set_error_resources(void)
 
 	/* Operation is retried wirth default parameters. */
 	__cmock_sd_ble_gap_phy_update_ExpectWithArrayAndReturn(
-		CONN_HANDLE, &phy_config, 1, NRF_SUCCESS);
+		CONN_HANDLE, &phy_fallback, 1, NRF_SUCCESS);
 
 	nrf_err = ble_conn_params_phy_radio_mode_set(CONN_HANDLE, phy_all);
 	TEST_ASSERT_EQUAL(NRF_SUCCESS, nrf_err);

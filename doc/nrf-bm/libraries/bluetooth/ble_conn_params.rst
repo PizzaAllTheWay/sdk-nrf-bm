@@ -115,15 +115,25 @@ Radio PHY mode
 
 The radio PHY mode defaults to 1 MB per second at the start of a connection.
 This can be changed by initiating a GAP radio PHY mode update procedure.
-If a specific radio PHY mode is required in connections, one of the following choice options must be enabled:
+Choose either automatic PHY selection, or disable auto and enable one or more allowed PHYs:
 
 * :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_AUTO` - The SoftDevice will automatically select the PHY mode.
-* :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_1MBPS` - Default speed of 1 MB per second.
-* :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_2MBPS` - Higher throughput of 2 MB per second.
-* :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_CODED` - Bluetooth LE Coded PHY mode (increased range and reliability of the transmission at the cost of reduced data throughput).
+* :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_1MBPS` - Allow 1 MB per second.
+* :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_2MBPS` - Allow 2 MB per second.
+* :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_CODED` - Allow Bluetooth LE Coded PHY mode (increased range and reliability at the cost of reduced throughput).
+
+When :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_AUTO` is disabled, the PHY options above act as an allow-mask and can be enabled in combination (for example 1M + 2M).
+The effective request sent to the SoftDevice is filtered by:
+
+1. SoftDevice capability mask (:c:macro:`BLE_GAP_PHYS_SUPPORTED`)
+2. Application PHY allow-mask from Kconfig (:kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY`)
+
+This ensures that peer requests and local requests made through :c:func:`ble_conn_params_phy_radio_mode_set` stay within the application-defined PHY limits.
 
 .. note::
-   The S115 SoftDevice does not support the :kconfig:option:`CONFIG_BLE_CONN_PARAMS_PHY_CODED` Kconfig option.
+   Bluetooth LE Coded PHY can be enabled in configuration, but support depends on the selected SoftDevice and target hardware.
+   In the current BM SoftDevice context (including S115 and S145), coded PHY is not supported at runtime, so coded bits are filtered out from requests.
+   In that case, negotiation falls back to the remaining allowed PHY preferences (for example 1M or 2M), or to the default fallback path if no valid coded request remains.
 
 The :kconfig:option:`CONFIG_BLE_CONN_PARAMS_INITIATE_PHY_UPDATE` Kconfig option can be set to automatically initiate a radio PHY update on connection.
 

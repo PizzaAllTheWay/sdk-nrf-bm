@@ -13,57 +13,105 @@ LOG_MODULE_DECLARE(ble_conn_params, CONFIG_BLE_CONN_PARAMS_LOG_LEVEL);
 
 extern void ble_conn_params_event_send(const struct ble_conn_params_evt *evt);
 
+/* App-configured PHY allow-mask derived from Kconfig. */
+#define BLE_CONN_PARAMS_PHY_APP_MASK CONFIG_BLE_CONN_PARAMS_PHY
+/* Auto mode fallback uses 1M as a conservative recovery PHY. */
+#define BLE_CONN_PARAMS_PHY_AUTO_FALLBACK BLE_GAP_PHY_1MBPS
+#define BLE_CONN_PARAMS_PHY_IS_AUTO (BLE_CONN_PARAMS_PHY_APP_MASK == BLE_GAP_PHY_AUTO)
+#define BLE_CONN_PARAMS_PHY_HAS_STACK_SUPPORT ((BLE_CONN_PARAMS_PHY_APP_MASK & \
+						BLE_GAP_PHYS_SUPPORTED) != 0)
+#define BLE_CONN_PARAMS_PHY_EFFECTIVE_APP_MASK \
+	(BLE_CONN_PARAMS_PHY_IS_AUTO ? BLE_GAP_PHYS_SUPPORTED : \
+				       (BLE_CONN_PARAMS_PHY_APP_MASK & BLE_GAP_PHYS_SUPPORTED))
+/* Recovery mask used for one fallback retry on resource errors. */
+#define BLE_CONN_PARAMS_PHY_FALLBACK_MASK \
+	(BLE_CONN_PARAMS_PHY_IS_AUTO ? BLE_CONN_PARAMS_PHY_AUTO_FALLBACK : \
+				       BLE_CONN_PARAMS_PHY_APP_MASK)
+
 static struct {
+	/* Last requested/effective PHY preference for this link. */
 	ble_gap_phys_t phy_mode;
+	/* Deferred retry flag when SoftDevice reports busy/collision. */
 	uint8_t phy_mode_update_pending : 1;
 } links[CONFIG_NRF_SDH_BLE_TOTAL_LINK_COUNT] = {
 	[0 ... CONFIG_NRF_SDH_BLE_TOTAL_LINK_COUNT - 1] = {
-		.phy_mode.tx_phys = CONFIG_BLE_CONN_PARAMS_PHY,
-		.phy_mode.rx_phys = CONFIG_BLE_CONN_PARAMS_PHY,
+		.phy_mode.tx_phys = BLE_CONN_PARAMS_PHY_APP_MASK,
+		.phy_mode.rx_phys = BLE_CONN_PARAMS_PHY_APP_MASK,
 	},
 };
 
-BUILD_ASSERT(CONFIG_BLE_CONN_PARAMS_PHY == BLE_GAP_PHY_AUTO ||
-	     !!(CONFIG_BLE_CONN_PARAMS_PHY & BLE_GAP_PHYS_SUPPORTED), "Invalid PHY config");
+BUILD_ASSERT(BLE_CONN_PARAMS_PHY_IS_AUTO || BLE_CONN_PARAMS_PHY_HAS_STACK_SUPPORT,
+	     "Invalid PHY config");
+
+static ble_gap_phys_t radio_phy_mode_prepare(ble_gap_phys_t phy_mode)
+{
+	/* Apply app policy on top of what this SoftDevice can support. */
+	const uint8_t app_mask = BLE_CONN_PARAMS_PHY_EFFECTIVE_APP_MASK;
+	ble_gap_phys_t phys = phy_mode;
+
+	if (phys.tx_phys == BLE_GAP_PHY_AUTO) {
+		/* AUTO means "choose from allowed PHYs", so expand to effective allow-mask. */
+		phys.tx_phys = app_mask;
+	} else if (phys.tx_phys != BLE_GAP_PHY_NOT_SET) {
+		/* Keep caller/peer intent, but clamp it to the allowed PHY set. */
+		phys.tx_phys &= app_mask;
+	}
+
+	if (phys.rx_phys == BLE_GAP_PHY_AUTO) {
+		/* Same policy for RX direction: AUTO resolves to the allowed PHY mask. */
+		phys.rx_phys = app_mask;
+	} else if (phys.rx_phys != BLE_GAP_PHY_NOT_SET) {
+		/* Intersection avoids broadening an explicit peer/application request. */
+		phys.rx_phys &= app_mask;
+	}
+
+	/* If filtering removed all bits, fall back to app mask or 1M in auto mode. */
+	if (phys.tx_phys == 0) {
+		phys.tx_phys = app_mask ? app_mask : BLE_CONN_PARAMS_PHY_FALLBACK_MASK;
+	}
+	if (phys.rx_phys == 0) {
+		phys.rx_phys = app_mask ? app_mask : BLE_CONN_PARAMS_PHY_FALLBACK_MASK;
+	}
+
+	return phys;
+}
 
 static void radio_phy_mode_update(uint16_t conn_handle, int idx)
 {
 	uint32_t nrf_err;
-	ble_gap_phys_t phys = links[idx].phy_mode;
+	ble_gap_phys_t phys;
 	struct ble_conn_params_evt app_evt = {
 		.evt_type = BLE_CONN_PARAMS_EVT_ERROR,
 		.conn_handle = conn_handle,
 	};
 
+	for (int attempt = 0; attempt < 2; attempt++) {
+		/* Always sanitize before calling into SoftDevice. */
+		phys = radio_phy_mode_prepare(links[idx].phy_mode);
 
-	if (phys.tx_phys != BLE_GAP_PHY_NOT_SET) {
-		phys.tx_phys &= BLE_GAP_PHYS_SUPPORTED;
-	}
+		nrf_err = sd_ble_gap_phy_update(conn_handle, &phys);
+		if (nrf_err == NRF_SUCCESS) {
+			return;
+		} else if (nrf_err == NRF_ERROR_BUSY) {
+			/* Retry */
+			links[idx].phy_mode_update_pending = true;
+			LOG_DBG("Failed PHY update procedure, another procedure is ongoing, "
+				"Will retry");
+			return;
+		} else if (nrf_err == NRF_ERROR_RESOURCES && attempt == 0) {
+			/* Retry once with fallback mask, avoids recursive call chain. */
+			LOG_WRN("Failed PHY update procedure. Retrying with app fallback PHY");
+			LOG_DBG("GAP event length (%d) may be too small",
+				CONFIG_NRF_SDH_BLE_GAP_EVENT_LENGTH);
+			links[idx].phy_mode.tx_phys = BLE_CONN_PARAMS_PHY_FALLBACK_MASK;
+			links[idx].phy_mode.rx_phys = BLE_CONN_PARAMS_PHY_FALLBACK_MASK;
+			continue;
+		}
 
-	if (phys.rx_phys != BLE_GAP_PHY_NOT_SET) {
-		phys.rx_phys &= BLE_GAP_PHYS_SUPPORTED;
-	}
-
-	nrf_err = sd_ble_gap_phy_update(conn_handle, &phys);
-	if (nrf_err == NRF_SUCCESS) {
-		return;
-	} else if (nrf_err == NRF_ERROR_BUSY) {
-		/* Retry */
-		links[idx].phy_mode_update_pending = true;
-		LOG_DBG("Failed PHY update procedure, another procedure is ongoing, "
-			"Will retry");
-	} else if (nrf_err == NRF_ERROR_RESOURCES) {
-		/* PHY update failed. Use current PHY. */
-		LOG_WRN("Failed PHY update procedure. Continue using current PHY mode");
-		LOG_DBG("GAP event length (%d) may be too small",
-			CONFIG_NRF_SDH_BLE_GAP_EVENT_LENGTH);
-		links[idx].phy_mode.tx_phys = CONFIG_BLE_CONN_PARAMS_PHY;
-		links[idx].phy_mode.rx_phys = CONFIG_BLE_CONN_PARAMS_PHY;
-		radio_phy_mode_update(conn_handle, idx);
-	} else {
 		LOG_ERR("Failed PHY update procedure, nrf_error %#x", nrf_err);
 		app_evt.error.reason = nrf_err;
 		ble_conn_params_event_send(&app_evt);
+		return;
 	}
 }
 
@@ -106,11 +154,13 @@ static void on_radio_phy_mode_update_evt(uint16_t conn_handle, int idx,
 static void on_radio_phy_mode_update_request_evt(uint16_t conn_handle, int idx,
 						 const ble_gap_evt_phy_update_request_t *evt)
 {
+	ble_gap_phys_t peer_phys = evt->peer_preferred_phys;
+
 	LOG_INF("Peer %#x requested PHY update to tx %u, rx %u", conn_handle,
 		evt->peer_preferred_phys.tx_phys, evt->peer_preferred_phys.rx_phys);
 
-	links[idx].phy_mode.tx_phys = evt->peer_preferred_phys.tx_phys;
-	links[idx].phy_mode.rx_phys = evt->peer_preferred_phys.rx_phys;
+	/* Respect peer request only within app + SoftDevice allowed masks. */
+	links[idx].phy_mode = radio_phy_mode_prepare(peer_phys);
 
 	radio_phy_mode_update(conn_handle, idx);
 }
