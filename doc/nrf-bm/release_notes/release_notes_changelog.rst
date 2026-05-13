@@ -81,6 +81,10 @@ Libraries
       * An issue where the :c:func:`ble_conn_params_phy_radio_mode_get` function would incorrectly return the PHY mode mask of a pending update rather than the currently active PHY mode if a PHY update initiated by the :c:func:`ble_conn_params_phy_radio_mode_set` function was still in progress.
       * An issue where the SoftDevice define :c:macro:`BLE_GAP_PHYS_SUPPORTED` was used instead of the PHY preferences set with Kconfig when initiating or responding to a PHY update procedure.
 
+* Added the :ref:`lib_bm_spi_mngr` library for queued SPI master transactions on a single SPIM instance.
+  Enable it with the :kconfig:option:`CONFIG_BM_SPI_MNGR` Kconfig option.
+  See :ref:`lib_bm_spi_mngr` for an overview and :ref:`SPI transaction manager API reference <api_bm_spi_mngr>` for the full API.
+
 Bluetooth LE Services
 ---------------------
 
