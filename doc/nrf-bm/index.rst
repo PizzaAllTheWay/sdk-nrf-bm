@@ -50,3 +50,4 @@ The |BMlong| is a distinct repository that incorporates elements from the existi
    migration/nrf5_bm_migration.rst
    softdevice_docs.rst
    api/api.rst
+   style_guide/index.rst

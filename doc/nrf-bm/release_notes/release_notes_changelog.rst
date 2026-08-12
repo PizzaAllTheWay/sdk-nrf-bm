@@ -237,4 +237,4 @@ No changes since the latest nRF Connect SDK Bare Metal release.
 Documentation
 =============
 
-No changes since the latest nRF Connect SDK Bare Metal release.
+* Added a documentation and comment style guide under :file:`doc/nrf-bm/style_guide/`, covering RST, Doxygen, C source, Kconfig, devicetree, CMake, and Python conventions specific to |BMshort|.

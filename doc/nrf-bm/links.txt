@@ -135,6 +135,43 @@
 .. _`nRF5 SDK DFU memory layout`: https://docs.nordicsemi.com/bundle/sdk_nrf5_v17.1.0/page/lib_bootloader.html
 .. _`MCUmgr SMP protocol`: https://docs.zephyrproject.org/latest/services/device_mgmt/smp_protocol.html
 
+.. ### Style guide - nRF Connect SDK
+
+.. _`nRF Connect SDK documentation guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html
+.. _`nRF Connect SDK Doxygen guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#doxygen-gl
+.. _`nRF Connect SDK Doxygen guidelines for enums`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#enums
+.. _`nRF Connect SDK Doxygen guidelines for file headers and groups`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#file-headers-and-groups
+.. _`nRF Connect SDK Doxygen guidelines for functions`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#functions
+.. _`nRF Connect SDK Doxygen guidelines for structs`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#structs
+.. _`nRF Connect SDK Doxygen guidelines for typedefs`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#typedefs
+.. _`nRF Connect SDK guidelines for including doxygen in RST`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#inclusion-in-rst-files
+.. _`nRF Connect SDK Kconfig guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#kconfig-gl
+.. _`nRF Connect SDK Kconfig symbol-specific patterns`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#symbol-specific-patterns
+.. _`nRF Connect SDK RST guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/dev_model_and_contributions/documentation/styleguide.html#rst-gl
+
+.. ### Style guide - Zephyr
+
+.. _`Zephyr C code style guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/code.html
+.. _`Zephyr CMake style guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/cmake.html
+.. _`Zephyr coding style guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/index.html
+.. _`Zephyr devicetree bindings syntax`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/build/dts/bindings-syntax.html
+.. _`Zephyr devicetree style guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/devicetree.html
+.. _`Zephyr documentation guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/documentation/guidelines.html
+.. _`Zephyr Doxygen style guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/doxygen.html
+.. _`Zephyr Kconfig style guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/kconfig.html
+.. _`Zephyr Kconfig tips and best practices`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/build/kconfig/tips.html
+.. _`Zephyr naming conventions`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/naming.html
+.. _`Zephyr Python style guidelines`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/contribute/style/python.html
+.. _`Zephyr rules for upstream devicetree bindings`: https://nrfconnectdocs.nordicsemi.com/ncs/latest/zephyr/build/dts/bindings-upstream.html
+
+.. ### Style guide - tools and external references
+
+.. _`Doxygen commands`: https://www.doxygen.nl/manual/commands.html
+.. _`Nordic TechDocs Style Guide`: https://nordicplayground.github.io/techdocs-style-guide/
+.. _`PEP 257`: https://peps.python.org/pep-0257/
+.. _`Ruff`: https://docs.astral.sh/ruff/
+.. _`Sphinx`: https://www.sphinx-doc.org/en/master/
+
 .. ### Other links
 
 .. _`Bluetooth Core Specification`: https://www.bluetooth.org/en-us/specification/adopted-specifications
