@@ -52,61 +52,13 @@ LOG_MODULE_REGISTER(sample, CONFIG_SAMPLE_SQSPI_LOG_LEVEL);
 #define MX25_BIT_CLEARED false
 #define MX25_BIT_SET	 true
 
-RING_BUF_DECLARE(evt_queue, sizeof(nrf_sqspi_xfer_t) * 32);
+static volatile uint8_t read_buf[sizeof(CONFIG_SAMPLE_SQSPI_MSG)];
+static uint8_t quad_enable[3] = { 1 << MX25_QUAD_ENABLE_BIT_OFFSET, 0, 0 };
 
-static uint8_t read_rx[sizeof(CONFIG_SAMPLE_SQSPI_MSG)];
-static const uint8_t quad_enable[3] = {1 << MX25_QUAD_ENABLE_BIT_OFFSET, 0, 0};
+/* Set to 0 if no command in progress. */
+static volatile uint32_t cmd_active;
 static volatile uint8_t status_reg;
-
-static uint32_t cmd;
-
-static const nrf_sqspi_xfer_t xfers[] = {
-	{	/* Read */
-		.dir = NRF_SQSPI_XFER_DIR_RX,
-		.cmd = MX25_CMD_4READ,
-		.cmd_length = MX25_CMD_LEN,
-		.address = CONFIG_SAMPLE_SQSPI_FLASH_ADDR,
-		.addr_length = MX25_ADDRESS_LEN,
-		.dummy_length = 6,
-		.p_data = read_rx,
-		.data_length = sizeof(read_rx),
-	},
-	{	/* Erase */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_SECTOR_ERASE,
-		.cmd_length = MX25_CMD_LEN,
-		.address = CONFIG_SAMPLE_SQSPI_FLASH_ADDR,
-		.addr_length = MX25_ADDRESS_LEN,
-	},
-	{	/* Page program */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_4PAGE_PROGRAM,
-		.cmd_length = MX25_CMD_LEN,
-		.address = CONFIG_SAMPLE_SQSPI_FLASH_ADDR,
-		.addr_length = MX25_ADDRESS_LEN,
-		.p_data = CONFIG_SAMPLE_SQSPI_MSG,
-		.data_length = sizeof(CONFIG_SAMPLE_SQSPI_MSG)
-	},
-	{	/* Read status register */
-		.dir = NRF_SQSPI_XFER_DIR_RX,
-		.cmd = MX25_CMD_RDSR,
-		.cmd_length = MX25_CMD_LEN,
-		.p_data = &status_reg,
-		.data_length = sizeof(status_reg),
-	},
-	{	/* Write enable */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_WREN,
-		.cmd_length = MX25_CMD_LEN,
-	},
-	{	/* Write status register */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_WRSR,
-		.cmd_length = MX25_CMD_LEN,
-		.p_data = quad_enable,
-		.data_length = sizeof(quad_enable),
-	}
-};
+RING_BUF_DECLARE(op_queue, sizeof(nrf_sqspi_xfer_t) * 32);
 
 /* The sQSPI registers are in RAM shared with the FLPR core that runs the soft peripheral. */
 static nrf_sqspi_t qspi = {
@@ -114,47 +66,56 @@ static nrf_sqspi_t qspi = {
 	.drv_inst_idx = 0
 };
 
-/* Set by the driver callback when a transfer is done. */
-static volatile bool xfer_active;
+static void xfer_done_cb(nrf_sqspi_t const *qspi, nrf_sqspi_evt_t *evt, void *ctx);
 
 ISR_DIRECT_DECLARE(sqspi_direct_isr)
 {
 	nrf_sqspi_irq_handler();
+
 	return 0;
 }
 
 static int queue_pop(nrf_sqspi_xfer_t *xfer)
 {
-	unsigned int key = irq_lock();
-	if(ring_buf_size_get(&evt_queue) < sizeof(*xfer))
-	{
-		irq_unlock(key);
-		return -ENOMEM;
-	}
-	ring_buf_get(&evt_queue, (uint8_t *)xfer, sizeof(*xfer));
-	irq_unlock(key);
+	int err = 0;
+	uint32_t rc;
+	unsigned int key;
 
-	return 0;
+	key = irq_lock();
+
+	rc = ring_buf_get(&op_queue, (uint8_t *)xfer, sizeof(nrf_sqspi_xfer_t));
+	if (rc != sizeof(nrf_sqspi_xfer_t)) {
+		err = -ENOENT;
+	}
+
+	irq_unlock(key);
+	return err;
 }
 
-static int queue_push(const nrf_sqspi_xfer_t *xfer)
+static int queue_push_array(const nrf_sqspi_xfer_t xfer[], size_t num_xfers)
 {
-	unsigned int key = irq_lock();
-	if(ring_buf_space_get(&evt_queue) < sizeof(*xfer))
-	{
-		irq_unlock(key);
-		return -ENOMEM;
+	uint32_t err = 0;
+	unsigned int key;
+
+	key = irq_lock();
+
+	if (ring_buf_space_get(&op_queue) < (sizeof(nrf_sqspi_xfer_t) * num_xfers)) {
+		err = -ENOMEM;
+		goto out;
 	}
-	ring_buf_put(&evt_queue, (uint8_t *)xfer, sizeof(*xfer));
+
+	for (int i = 0; i < num_xfers; i++) {
+		ring_buf_put(&op_queue, (uint8_t *)&xfer[i], sizeof(nrf_sqspi_xfer_t));
+	}
+
+out:
 	irq_unlock(key);
-
-	return 0;
-
+	return err;
 }
 
-static nrf_sqspi_spi_lines_t get_lines(uint32_t cmd){
-	switch (cmd)
-	{
+static nrf_sqspi_spi_lines_t get_lines(uint32_t cmd)
+{
+	switch (cmd) {
 	case MX25_CMD_WREN:
 	case MX25_CMD_SECTOR_ERASE:
 	case MX25_CMD_RDSR:
@@ -165,89 +126,113 @@ static nrf_sqspi_spi_lines_t get_lines(uint32_t cmd){
 	}
 }
 
-static void xfer_done_cb(nrf_sqspi_t const *p_qspi, nrf_sqspi_evt_t *p_event, void *p_context);
-
-static nrfx_err_t sqspi_xfer_index(void)
+static int sqspi_xfer_next(nrf_sqspi_t const *qspi)
 {
-	nrfx_err_t err;
-	uint8_t xfer_index;
+	int err;
 	nrf_sqspi_xfer_t xfer;
-	if(!queue_pop(&xfer)){
-		const nrf_sqspi_dev_cfg_t dev_cfg = {
-			.csn_pin = BOARD_EXTERNAL_MEMORY_SPIM_PIN_CSN,
-			.sck_freq_khz = 1000,
-			.spi_cpolpha = NRF_SQSPI_SPI_CPOLPHA_0,
-			.mspi_lines = get_lines(xfer.cmd),
-			.mspi_ddr = NRF_SQSPI_SPI_DDR_SINGLE,
-		};
+	nrf_sqspi_dev_cfg_t dev_cfg = {
+		.csn_pin = BOARD_EXTERNAL_MEMORY_SPIM_PIN_CSN,
+		.sck_freq_khz = 1000,
+		.spi_cpolpha = NRF_SQSPI_SPI_CPOLPHA_0,
+		.mspi_ddr = NRF_SQSPI_SPI_DDR_SINGLE,
+	};
 
-		err = nrf_sqspi_dev_cfg(&qspi, &dev_cfg, xfer_done_cb, NULL);
+	err = queue_pop(&xfer);
+	if (err) {
+		return err;
+	}
+
+	dev_cfg.mspi_lines = get_lines(xfer.cmd);
+
+	err = nrf_sqspi_dev_cfg(qspi, &dev_cfg, xfer_done_cb, NULL);
+	if (err != NRFX_SUCCESS) {
+		LOG_ERR("nrf_sqspi_dev_cfg failed, err #%x", err);
+		return -EIO;
+	}
+	cmd_active = xfer.cmd;
+
+	if ((cmd_active == MX25_CMD_SECTOR_ERASE || cmd_active == MX25_CMD_4PAGE_PROGRAM) &&
+	    !(status_reg & MX25_WEL_BIT)) {
+		LOG_WRN("Write/erase operation scheduled with WEL bit not set");
+	}
+
+	err = nrf_sqspi_xfer(qspi, &xfer, 1, 0);
+	if (err != NRFX_SUCCESS) {
+		LOG_ERR("nrf_sqspi_xfer failed, err #%x", err);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static void xfer_done_cb(nrf_sqspi_t const *qspi, nrf_sqspi_evt_t *evt, void *ctx)
+{
+	int err;
+	const nrf_sqspi_dev_cfg_t dev_cfg = {
+		.csn_pin = BOARD_EXTERNAL_MEMORY_SPIM_PIN_CSN,
+		.sck_freq_khz = 1000,
+		.spi_cpolpha = NRF_SQSPI_SPI_CPOLPHA_0,
+		.mspi_lines = NRF_SQSPI_SPI_LINES_SINGLE,
+		.mspi_ddr = NRF_SQSPI_SPI_DDR_SINGLE,
+	};
+	/* Read status register */
+	nrf_sqspi_xfer_t rdsr_xfer = {
+		.dir = NRF_SQSPI_XFER_DIR_RX,
+		.cmd = MX25_CMD_RDSR,
+		.cmd_length = MX25_CMD_LEN,
+		.p_data = (void *)&status_reg,
+		.data_length = sizeof(status_reg),
+	};
+
+	if (evt->type != NRF_SQSPI_EVT_XFER_DONE) {
+		/* Only pricess transfer done events.*/
+		return;
+	}
+
+	if (evt->data.xfer_done != NRF_SQSPI_RESULT_OK) {
+		LOG_ERR("Transfer done error, err = %d", evt->data.xfer_done);
+	}
+
+	switch(cmd_active) {
+	case MX25_CMD_4READ:
+		LOG_HEXDUMP_INF(read_buf, sizeof(read_buf), "Read complete");
+		break;
+	case MX25_CMD_SECTOR_ERASE:
+		LOG_INF("Erase complete");
+		break;
+	case MX25_CMD_4PAGE_PROGRAM:
+		LOG_INF("Write complete");
+		break;
+	}
+
+	/* Operation complete, no active command. */
+	cmd_active = 0;
+
+	if (status_reg & MX25_WIP_BIT) {
+		/* Poll status register to wait for internal operation to complete. */
+		cmd_active = MX25_CMD_RDSR;
+		err = nrf_sqspi_dev_cfg(qspi, &dev_cfg, xfer_done_cb, NULL);
 		if (err != NRFX_SUCCESS) {
-			return err;
+			LOG_ERR("nrf_sqspi_dev_cfg failed, err = %d", err);
 		}
-		cmd = xfer.cmd;
 
-		return nrf_sqspi_xfer(&qspi, &xfer, 1, 0);
+		err = nrf_sqspi_xfer(qspi, &rdsr_xfer, 1, 0);
+		if (err != NRFX_SUCCESS) {
+			LOG_ERR("Failed to read status register, err = %d", err);
+		}
+
+		return;
 	}
-	return NRFX_ERROR_NO_MEM;
+
+	(void)sqspi_xfer_next(qspi);
+
+	/* Set WIP bit so that check before continuing with the next operation. */
+	status_reg |= MX25_WIP_BIT;
 }
 
-static void xfer_done_cb(nrf_sqspi_t const *p_qspi, nrf_sqspi_evt_t *p_event, void *p_context)
+static int external_memory_init(nrf_sqspi_t const *qspi)
 {
-	if (p_event->type == NRF_SQSPI_EVT_XFER_DONE) {
-		if (p_event->data.xfer_done != NRF_SQSPI_RESULT_OK) {
-			LOG_ERR("xfer done error, err = %d", p_event->data.xfer_done);
-		}
-		if(cmd == MX25_CMD_4READ)
-		{
-			LOG_HEXDUMP_INF(read_rx, sizeof(read_rx), "Flash");
-			if(!(status_reg & MX25_WEL_BIT)) {
-				LOG_DBG("Write enable latch not set");
-				// nrf_sqspi_xfer(&qspi, &xfers[RDSR_XFER_INDEX], 1, 0);
-			}
-		} else if(cmd == MX25_CMD_SECTOR_ERASE){
-			if(!(status_reg & MX25_WEL_BIT)) {
-				LOG_DBG("Write enable latch not set");
-				// nrf_sqspi_xfer(&qspi, &xfers[RDSR_XFER_INDEX], 1, 0);
-			}
-		}
-		if((status_reg & MX25_WIP_BIT)) {
-			cmd = MX25_CMD_RDSR;
-			const nrf_sqspi_dev_cfg_t dev_cfg = {
-				.csn_pin = BOARD_EXTERNAL_MEMORY_SPIM_PIN_CSN,
-				.sck_freq_khz = 1000,
-				.spi_cpolpha = NRF_SQSPI_SPI_CPOLPHA_0,
-				.mspi_lines = NRF_SQSPI_SPI_LINES_SINGLE,
-				.mspi_ddr = NRF_SQSPI_SPI_DDR_SINGLE,
-			};
-
-			nrfx_err_t err = nrf_sqspi_dev_cfg(&qspi, &dev_cfg, xfer_done_cb, NULL);
-			if (err != NRFX_SUCCESS) {
-				LOG_ERR("dev cfg failed, err = %d", err);
-			}
-
-			nrf_sqspi_xfer_t rdsr_xfer = {	/* Read status register */
-				.dir = NRF_SQSPI_XFER_DIR_RX,
-				.cmd = MX25_CMD_RDSR,
-				.cmd_length = MX25_CMD_LEN,
-				.p_data = &status_reg,
-				.data_length = sizeof(status_reg),
-			};
-
-			err = nrf_sqspi_xfer(&qspi, &rdsr_xfer, 1, 0);
-			if(err != NRFX_SUCCESS) {
-				LOG_ERR("Read status register failed, err = %d", err);
-			}
-		}
-		else if(sqspi_xfer_index() != NRFX_SUCCESS){
-			xfer_active = false;
-		}
-	}
-}
-
-static nrfx_err_t external_memory_init(void)
-{
-	nrfx_err_t err;
+	int err;
 	/* Quad commands only work when the Quad Enable (QE) bit in the status register is set. */
 	const nrf_gpio_pin_drive_t drive = NRF_GPIO_PIN_E0E1;
 	static const nrf_sqspi_cfg_t cfg = {
@@ -259,8 +244,8 @@ static nrfx_err_t external_memory_init(void)
 				BOARD_EXTERNAL_MEMORY_SPIM_PIN_MISO,
 				BOARD_EXTERNAL_MEMORY_PIN_WP,
 				BOARD_EXTERNAL_MEMORY_PIN_RST,
-			}
-		}
+			},
+		},
 	};
 	nrf_sqspi_data_fmt_t sqspi_data_fmt = {
 		.cmd_bit_order = NRF_SQSPI_DATA_FMT_BIT_ORDER_MSB_FIRST,
@@ -271,32 +256,28 @@ static nrfx_err_t external_memory_init(void)
 		.data_swap_unit = 8,
 		.data_padding = NRF_SQSPI_DATA_FMT_PAD_RAW,
 	};
-	nrf_sqspi_xfer_t rdsr_xfer = {	/* Read status register */
-		.dir = NRF_SQSPI_XFER_DIR_RX,
-		.cmd = MX25_CMD_RDSR,
-		.cmd_length = MX25_CMD_LEN,
-		.p_data = &status_reg,
-		.data_length = sizeof(status_reg),
-	};
-	nrf_sqspi_xfer_t wren_xfer = {	/* Write enable */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_WREN,
-		.cmd_length = MX25_CMD_LEN,
-	};
-	nrf_sqspi_xfer_t wrsr_xfer = {	/* Write status register */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_WRSR,
-		.cmd_length = MX25_CMD_LEN,
-		.p_data = quad_enable,
-		.data_length = sizeof(quad_enable),
+	nrf_sqspi_xfer_t sqspi_xfers[] = {
+		{	/* Write enable */
+			.dir = NRF_SQSPI_XFER_DIR_TX,
+			.cmd = MX25_CMD_WREN,
+			.cmd_length = MX25_CMD_LEN,
+		},
+		{	/* Write status register */
+			.dir = NRF_SQSPI_XFER_DIR_TX,
+			.cmd = MX25_CMD_WRSR,
+			.cmd_length = MX25_CMD_LEN,
+			.p_data = quad_enable,
+			.data_length = sizeof(quad_enable),
+		},
 	};
 
 	/* FLPR must be a secure bus master to access its RAM and MEMCONF. */
 	nrf_spu_periph_perm_secattr_set(NRF_SPU00, nrf_address_slave_get((uint32_t)NRF_VPR), true);
 
-	err = nrf_sqspi_init(&qspi, &cfg);
+	err = nrf_sqspi_init(qspi, &cfg);
 	if (err != NRFX_SUCCESS) {
-		return err;
+		LOG_ERR("nrf_sqspi_init failed, err #%x", err);
+		return -EIO;
 	}
 
 	/* The driver uses standard drive, which is too weak for quad reads. */
@@ -305,177 +286,119 @@ static nrfx_err_t external_memory_init(void)
 		nrf_gpio_reconfigure(cfg.pins.io[i], NULL, NULL, NULL, &drive, NULL);
 	}
 
-	err = nrf_sqspi_dev_data_fmt_set(&qspi, &sqspi_data_fmt);
+	err = nrf_sqspi_dev_data_fmt_set(qspi, &sqspi_data_fmt);
 	if (err != NRFX_SUCCESS) {
 		LOG_ERR("nrf_sqspi_dev_data_fmt_set() failed: %d", err);
-		return err;
+		return -EIO;
 	}
 
 	BM_IRQ_DIRECT_CONNECT(SP_VPR_IRQn, 2, sqspi_direct_isr, 0);
 
-	err = nrf_sqspi_activate(&qspi);
+	err = nrf_sqspi_activate(qspi);
 	if (err != NRFX_SUCCESS) {
 		LOG_ERR("nrf_sqspi_activate failed, err = %d", err);
+		return -EIO;
+	}
+
+	err = queue_push_array(sqspi_xfers, ARRAY_SIZE(sqspi_xfers));
+	if (err) {
+		LOG_ERR("queue_push_array failed, err = %d", err);
 		return err;
 	}
-	queue_push(&rdsr_xfer);
-	queue_push(&wren_xfer);
-	queue_push(&rdsr_xfer);
-	queue_push(&wrsr_xfer);
 
-	return NRFX_SUCCESS;
+	return 0;
 }
 
-static nrfx_err_t flash_erase(void)
+static int flash_erase(uint64_t addr, size_t addr_len)
 {
 	int err;
-	nrf_sqspi_xfer_t rdsr_xfer = {	/* Read status register */
-		.dir = NRF_SQSPI_XFER_DIR_RX,
-		.cmd = MX25_CMD_RDSR,
-		.cmd_length = MX25_CMD_LEN,
-		.p_data = &status_reg,
-		.data_length = sizeof(status_reg),
-	};
-	nrf_sqspi_xfer_t wren_xfer = {	/* Write enable */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_WREN,
-		.cmd_length = MX25_CMD_LEN,
-	};
-	nrf_sqspi_xfer_t erase_xfer = {	/* Erase */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_SECTOR_ERASE,
-		.cmd_length = MX25_CMD_LEN,
-		.address = CONFIG_SAMPLE_SQSPI_FLASH_ADDR,
-		.addr_length = MX25_ADDRESS_LEN,
+	nrf_sqspi_xfer_t rdsr_xfers[] = {
+		{	/* Write enable */
+			.dir = NRF_SQSPI_XFER_DIR_TX,
+			.cmd = MX25_CMD_WREN,
+			.cmd_length = MX25_CMD_LEN,
+		},
+		{	/* Erase */
+			.dir = NRF_SQSPI_XFER_DIR_TX,
+			.cmd = MX25_CMD_SECTOR_ERASE,
+			.cmd_length = MX25_CMD_LEN,
+			.address = addr,
+			.addr_length = addr_len,
+		},
 	};
 
-	err = queue_push(&rdsr_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
+	err = queue_push_array(rdsr_xfers, ARRAY_SIZE(rdsr_xfers));
+	if (err) {
+		LOG_ERR("queue_push_array failed err = %d", err);
 		return err;
 	}
 
-	err = queue_push(&wren_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
-		return err;
-	}
+	LOG_DBG("Pushed erase to queue for address #%llx", addr);
 
-	err = queue_push(&rdsr_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
-		return err;
-	}
-
-	err = queue_push(&erase_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
-		return err;
-	} else {
-		LOG_INF("Pushed erase to queue");
-	}
-
-
-	return NRFX_SUCCESS;
+	return 0;
 }
 
-static nrfx_err_t flash_read(void)
+static int flash_read(uint64_t addr, size_t addr_len, void *buf, size_t buf_len)
 {
 	int err;
-	nrf_sqspi_xfer_t rdsr_xfer = {	/* Read status register */
-		.dir = NRF_SQSPI_XFER_DIR_RX,
-		.cmd = MX25_CMD_RDSR,
-		.cmd_length = MX25_CMD_LEN,
-		.p_data = &status_reg,
-		.data_length = sizeof(status_reg),
-	};
-	nrf_sqspi_xfer_t read_xfer = {	/* Read */
-		.dir = NRF_SQSPI_XFER_DIR_RX,
-		.cmd = MX25_CMD_4READ,
-		.cmd_length = MX25_CMD_LEN,
-		.address = CONFIG_SAMPLE_SQSPI_FLASH_ADDR,
-		.addr_length = MX25_ADDRESS_LEN,
-		.dummy_length = 6,
-		.p_data = read_rx,
-		.data_length = sizeof(read_rx),
+	nrf_sqspi_xfer_t sqspi_xfers[] = {
+		{	/* Read */
+			.dir = NRF_SQSPI_XFER_DIR_RX,
+			.cmd = MX25_CMD_4READ,
+			.cmd_length = MX25_CMD_LEN,
+			.address = addr,
+			.addr_length = addr_len,
+			.dummy_length = 6,
+			.p_data = buf,
+			.data_length = buf_len,
+		},
 	};
 
-	err = queue_push(&rdsr_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
+	err = queue_push_array(sqspi_xfers, ARRAY_SIZE(sqspi_xfers));
+	if (err) {
+		LOG_ERR("queue_push_array failed err = %d", err);
 		return err;
 	}
 
-	err = queue_push(&read_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
-		return err;
-	} else {
-		LOG_INF("Pushed read to queue");
-	}
+	LOG_DBG("Pushed read to queue for address #%llx", addr);
 
-	return NRFX_SUCCESS;
+	return 0;
 }
 
-static nrfx_err_t flash_program(void)
+static int flash_write(uint64_t addr, size_t addr_len, void *data, size_t data_len)
 {
 	int err;
-	nrf_sqspi_xfer_t rdsr_xfer = {	/* Read status register */
-		.dir = NRF_SQSPI_XFER_DIR_RX,
-		.cmd = MX25_CMD_RDSR,
-		.cmd_length = MX25_CMD_LEN,
-		.p_data = &status_reg,
-		.data_length = sizeof(status_reg),
-	};
-	nrf_sqspi_xfer_t wren_xfer = {	/* Write enable */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_WREN,
-		.cmd_length = MX25_CMD_LEN,
-	};
-	nrf_sqspi_xfer_t p_prog_xfer = {	/* Page program */
-		.dir = NRF_SQSPI_XFER_DIR_TX,
-		.cmd = MX25_CMD_4PAGE_PROGRAM,
-		.cmd_length = MX25_CMD_LEN,
-		.address = CONFIG_SAMPLE_SQSPI_FLASH_ADDR,
-		.addr_length = MX25_ADDRESS_LEN,
-		.p_data = CONFIG_SAMPLE_SQSPI_MSG,
-		.data_length = sizeof(CONFIG_SAMPLE_SQSPI_MSG)
+	nrf_sqspi_xfer_t sqspi_xfers[] = {
+		{	/* Write enable */
+			.dir = NRF_SQSPI_XFER_DIR_TX,
+			.cmd = MX25_CMD_WREN,
+			.cmd_length = MX25_CMD_LEN,
+		},
+		{	/* Page program */
+			.dir = NRF_SQSPI_XFER_DIR_TX,
+			.cmd = MX25_CMD_4PAGE_PROGRAM,
+			.cmd_length = MX25_CMD_LEN,
+			.address = addr,
+			.addr_length = addr_len,
+			.p_data = data,
+			.data_length = data_len,
+		},
 	};
 
-	err = queue_push(&rdsr_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
+	err = queue_push_array(sqspi_xfers, ARRAY_SIZE(sqspi_xfers));
+	if (err) {
+		LOG_ERR("queue_push_array failed err = %d", err);
 		return err;
 	}
 
-	err = queue_push(&wren_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
-		return err;
-	}
+	LOG_DBG("Pushed page program to queue for address #%llx", addr);
 
-	err = queue_push(&rdsr_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
-		return err;
-	}
-
-	err = queue_push(&p_prog_xfer);
-	if (err != 0){
-		LOG_ERR("queue_push failed err = %d", err);
-		return err;
-	} else {
-		LOG_INF("Pushed page program to queue");
-	}
-
-	return NRFX_SUCCESS;
+	return 0;
 }
-
-
 
 static void button_handler(uint8_t pin, enum bm_buttons_evt_type action)
 {
-	nrfx_err_t err;
+	int err;
 
 	if (action != BM_BUTTONS_PRESS) {
 		return;
@@ -483,30 +406,34 @@ static void button_handler(uint8_t pin, enum bm_buttons_evt_type action)
 
 	switch (pin) {
 	case BOARD_PIN_BTN_1:
-		err = flash_erase();
-		if (err != NRFX_SUCCESS) {
+		LOG_INF("Erasing...");
+		err = flash_erase(CONFIG_SAMPLE_SQSPI_FLASH_ADDR, MX25_ADDRESS_LEN);
+		if (err) {
 			LOG_ERR("Flash erase failed, err = %d", err);
 		}
 		break;
 	case BOARD_PIN_BTN_2:
-		err = flash_read();
-		if (err != NRFX_SUCCESS) {
+		LOG_INF("Reading...");
+		err = flash_read(CONFIG_SAMPLE_SQSPI_FLASH_ADDR, MX25_ADDRESS_LEN,
+				 (void *)read_buf, sizeof(read_buf));
+		if (err) {
 			LOG_ERR("Flash read failed, err = %d", err);
 		}
 		break;
 	case BOARD_PIN_BTN_3:
-		err = flash_program();
-		if (err != NRFX_SUCCESS) {
+		LOG_INF("Writing...");
+		err = flash_write(CONFIG_SAMPLE_SQSPI_FLASH_ADDR, MX25_ADDRESS_LEN,
+				  CONFIG_SAMPLE_SQSPI_MSG, sizeof(CONFIG_SAMPLE_SQSPI_MSG));
+		if (err) {
 			LOG_ERR("Flash program failed, err = %d", err);
 		}
 		break;
 	default:
 		break;
 	}
-	if(xfer_active == false)
-	{
-		xfer_active = true;
-		sqspi_xfer_index();
+
+	if (!cmd_active) {
+		(void)sqspi_xfer_next(&qspi);
 	}
 }
 
@@ -546,7 +473,6 @@ static int buttons_init(void)
 int main(void)
 {
 	int err;
-	nrfx_err_t nrfx_err;
 
 	err = buttons_init();
 	if (err) {
@@ -557,14 +483,14 @@ int main(void)
 	nrf_gpio_cfg_output(BOARD_PIN_LED_0);
 	nrf_gpio_pin_write(BOARD_PIN_LED_0, !BOARD_LED_ACTIVE_STATE);
 
-	nrfx_err = external_memory_init();
-	if (nrfx_err != NRFX_SUCCESS) {
-		LOG_ERR("SPI init failed, err %d", err);
+	err = external_memory_init(&qspi);
+	if (err) {
+		LOG_ERR("SPI init failed, err #%x", err);
 		goto idle;
 	}
 
 	LOG_INF("sQSPI sample initialized");
-	LOG_INF("Use following buttons to interact with external memory through SPI");
+	LOG_INF("Use the following buttons to interact with the external memory");
 	LOG_INF("Button 1: Erase");
 	LOG_INF("Button 2: Read");
 	LOG_INF("Button 3: Program");
