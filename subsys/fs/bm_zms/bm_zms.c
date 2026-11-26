@@ -165,7 +165,12 @@ static void queue_process(void)
 				/* If we are still moving data, a previous block write succeeded .
 				 * Increase the data write address by the size of the block.
 				 */
-				cur_op.fs->data_wra += zms_al_size(cur_op.fs, ZMS_BLOCK_SIZE);
+				uint64_t data_wra_add = zms_al_size(cur_op.fs, ZMS_BLOCK_SIZE);
+
+				cur_op.fs->data_wra += data_wra_add;
+
+				LOG_DBG("--- data_wra 0x%llx [+0x%llx]", cur_op.fs->data_wra,
+					data_wra_add);
 				/* If we are in the garbage collection step, we need to move the
 				 * block.
 				 */
@@ -252,7 +257,7 @@ completed:
 		result = 0;
 
 		if (!queue_has_next()) {
-			LOG_DBG("No more elements in the queue, exiting.");
+			// LOG_DBG("No more elements in the queue, exiting.");
 			/* No more elements left. Nothing to do. */
 			break;
 		}
@@ -720,6 +725,9 @@ static int zms_flash_al_wrt(struct bm_zms_fs *fs)
 	len = cur_op.len;
 
 	cur_op.len = 0;
+
+
+	LOG_INF("||| sub_step: %d", cur_op.sub_step);
 
 	zms_al_wrt_next_op(fs);
 	return bm_storage_write(&fs->zms_bm_storage, offset, data8, len, (void *)&cur_op);
@@ -1582,7 +1590,11 @@ ate_copy:
 	if (cur_op.gc.step == ZMS_OP_WRITE_GC_ATE_COPY) {
 		/* data write (if needed) succeeded, increment data_wra */
 		if (cur_op.ate_entry.len > ZMS_DATA_IN_ATE_SIZE) {
-			fs->data_wra += zms_al_size(fs, cur_op.ate_entry.len);
+			uint64_t data_wra_add = zms_al_size(fs, cur_op.ate_entry.len);
+
+			fs->data_wra += data_wra_add;
+
+			LOG_DBG("--> data_wra 0x%llx [+0x%llx]", fs->data_wra, data_wra_add);
 		}
 		cur_op.ate_entry.cycle_cnt = cur_op.gc.previous_cycle;
 		zms_ate_crc8_update(&cur_op.ate_entry);
@@ -2193,9 +2205,15 @@ static int zms_write_execute(void)
 	case ZMS_OP_WRITE_GC:
 		return zms_gc(fs);
 	case ZMS_OP_WRITE_DONE:
+		bool a_notch = false;
+		uint64_t data_wra_add = 0;
+
 		if (cur_op.data_len > ZMS_DATA_IN_ATE_SIZE) {
-			fs->data_wra += zms_al_size(fs, cur_op.data_len);
+			a_notch = true;
+			data_wra_add = zms_al_size(fs, cur_op.data_len);
+			fs->data_wra += data_wra_add;
 		}
+		LOG_DBG("->- data_wra 0x%llx [+0x%llx], %d", cur_op.fs->data_wra, data_wra_add, a_notch);
 		cur_op.op_completed = true;
 		return 0;
 	default:

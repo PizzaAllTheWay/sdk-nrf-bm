@@ -28,6 +28,10 @@
 
 #include <board-config.h>
 
+#include <zephyr/storage/flash_map.h>
+#include <bm/storage/bm_storage.h>
+#include <bm/fs/bm_zms.h>
+
 LOG_MODULE_REGISTER(sample, CONFIG_SAMPLE_BLE_HRS_LOG_LEVEL);
 
 #define CONN_TAG 1
@@ -302,6 +306,152 @@ static void ble_hrs_evt_handler(struct ble_hrs *hrs, const struct ble_hrs_evt *e
 	}
 }
 
+static struct bm_zms_fs fs;
+static volatile bool mount_done;
+static volatile bool clear_done;
+
+static void storage_handler(const struct bm_zms_evt *evt)
+{
+	switch (evt->evt_type) {
+	case BM_ZMS_EVT_MOUNT:
+		mount_done = true;
+		if (evt->result) {
+			LOG_ERR("bm_zms_mount failed with error %d", evt->result);
+			return;
+		}
+		break;
+	case BM_ZMS_EVT_CLEAR:
+		clear_done = true;
+		if (evt->result) {
+			LOG_ERR("bm_zms_clear failed with error %d", evt->result);
+			return;
+		}
+		break;
+	case BM_ZMS_EVT_WRITE:
+	case BM_ZMS_EVT_DELETE:
+		if (evt->result) {
+			LOG_ERR("BM_ZMS Error received %d", evt->result);
+		}
+		break;
+	default:
+		LOG_WRN("Unhandled BM_ZMS event ID %u", evt->evt_type);
+		break;
+	}
+}
+
+#define STORAGE_PARTITION_OFFSET PARTITION_ADDRESS(storage0_partition)
+#define STORAGE_PARTITION_SIZE PARTITION_SIZE(storage0_partition)
+#define STORAGE_SECTOR_SIZE 1024
+
+static int storage_init(void)
+{
+	int rc;
+	struct bm_zms_fs_config config = {
+		.offset = STORAGE_PARTITION_OFFSET,
+		.sector_size = STORAGE_SECTOR_SIZE,
+		.sector_count = (STORAGE_PARTITION_SIZE / STORAGE_SECTOR_SIZE),
+		.evt_handler = storage_handler,
+		.storage_api = &bm_storage_sd_api,
+	};
+
+	mount_done = false;
+	clear_done = false;
+
+	rc = bm_zms_mount(&fs, &config);
+	if (rc) {
+		LOG_ERR("Storage Init failed, rc %d", rc);
+		return rc;
+	}
+	
+	while (!mount_done) {
+		k_cpu_idle();
+	}
+
+	// rc = bm_zms_clear(&fs);
+	// if (rc) {
+	// 	LOG_ERR("Error while cleaning the storage, rc %d", rc);
+	// 	return rc;
+	// }
+	
+	// while(!clear_done) {
+	// 	k_cpu_idle();
+	// }
+
+	LOG_INF("Storage initialized successfully");
+	return 0;
+}
+
+#define ENTRY_2_ID 1337
+#define ENTRY_31_ID 43
+#define ENTRY_32_ID 101
+
+__aligned(4) uint8_t entry_2_data[63] = {0xA0,0xA2,0xA4,0xA6,0xA8,0xAA,0xAC,0xAE,
+					  0xB0,0xB2,0xB4,0xB6,0xB8,0xBA,0xBC,0xBE,
+					  0xC0,0xC2,0xC4,0xC6,0xC8,0xCA,0xCC,0xCE,
+					  0xD0,0xD2,0xD4,0xD6,0xD8,0xDA,0xDC,0xDE,
+					  0xA0,0xA2,0xA4,0xA6,0xA8,0xAA,0xAC,0xAE,
+					  0xB0,0xB2,0xB4,0xB6,0xB8,0xBA,0xBC,0xBE,
+					  0xC0,0xC2,0xC4,0xC6,0xC8,0xCA,0xCC,0xCE,
+					  0xD0,0xD2,0xD4,0xD6,0xD8,0xDA,0xDC};
+
+__aligned(4) uint8_t entry_31_data[127] = {0x20,0x22,0x24,0x26,0x28,0x2A,0x2C,0x2E,
+					  0x30,0x32,0x34,0x36,0x38,0x3A,0x3C,0x3E,
+					  0x40,0x42,0x44,0x46,0x48,0x4A,0x4C,0x4E,
+					  0x50,0x52,0x54,0x56,0x58,0x5A,0x5C,0x5E,
+					  0x20,0x22,0x24,0x26,0x28,0x2A,0x2C,0x2E,
+					  0x30,0x32,0x34,0x36,0x38,0x3A,0x3C,0x3E,
+					  0x40,0x42,0x44,0x46,0x48,0x4A,0x4C,0x4E,
+					  0x50,0x52,0x54,0x56,0x58,0x5A,0x5C,0x5E,
+					  0x20,0x22,0x24,0x26,0x28,0x2A,0x2C,0x2E,
+					  0x30,0x32,0x34,0x36,0x38,0x3A,0x3C,0x3E,
+					  0x40,0x42,0x44,0x46,0x48,0x4A,0x4C,0x4E,
+					  0x50,0x52,0x54,0x56,0x58,0x5A,0x5C,0x5E,
+					  0x20,0x22,0x24,0x26,0x28,0x2A,0x2C,0x2E,
+					  0x30,0x32,0x34,0x36,0x38,0x3A,0x3C,0x3E,
+					  0x40,0x42,0x44,0x46,0x48,0x4A,0x4C,0x4E,
+					  0x50,0x52,0x54,0x56,0x58,0x5A,0x5C};
+
+__aligned(4) uint8_t entry_32_data[7] = {0x11,0x22,0x33,0x44,0x55,0x66,0x77};
+
+static void button_2_handler(uint8_t pin, enum bm_buttons_evt_type action)
+{
+	int rc;
+
+	if (action != BM_BUTTONS_PRESS) {
+		return;
+	}
+
+	rc = bm_zms_write(&fs, ENTRY_2_ID, entry_2_data, sizeof(entry_2_data));
+	if (rc < 0) {
+		LOG_ERR("bm_zms_write failed for entry 2, rc %d", rc);
+	}
+}
+
+static void button_3_handler(uint8_t pin, enum bm_buttons_evt_type action)
+{
+	int rc;
+	static uint32_t entry_id = ENTRY_31_ID;
+
+	if (action != BM_BUTTONS_PRESS) {
+		return;
+	}
+
+	/* Flip between two different entries. */
+	entry_id = (entry_id == ENTRY_31_ID) ? ENTRY_32_ID : ENTRY_31_ID;
+
+	if (entry_id == ENTRY_31_ID) {
+		rc = bm_zms_write(&fs, ENTRY_31_ID, entry_31_data, sizeof(entry_31_data));
+		if (rc < 0) {
+			LOG_ERR("bm_zms_write failed for entry 31, rc %d", rc);
+		}
+	} else {
+		rc = bm_zms_write(&fs, ENTRY_32_ID, entry_32_data, sizeof(entry_32_data));
+		if (rc < 0) {
+			LOG_ERR("bm_zms_write failed for entry 32, rc %d", rc);
+		}
+	}
+}
+
 static int buttons_init(bool *erase_bonds)
 {
 	int err;
@@ -311,6 +461,18 @@ static int buttons_init(bool *erase_bonds)
 			.active_state = BM_BUTTONS_ACTIVE_LOW,
 			.pull_config = BM_BUTTONS_PIN_PULLUP,
 			.handler = NULL,
+		},
+		{
+			.pin_number = BOARD_PIN_BTN_2,
+			.active_state = BM_BUTTONS_ACTIVE_LOW,
+			.pull_config = BM_BUTTONS_PIN_PULLUP,
+			.handler = button_2_handler,
+		},
+		{
+			.pin_number = BOARD_PIN_BTN_3,
+			.active_state = BM_BUTTONS_ACTIVE_LOW,
+			.pull_config = BM_BUTTONS_PIN_PULLUP,
+			.handler = button_3_handler,
 		},
 	};
 
@@ -537,9 +699,14 @@ int main(void)
 	nrf_gpio_pin_write(BOARD_PIN_LED_0, BOARD_LED_ACTIVE_STATE);
 	LOG_INF("BLE HRS sample initialized");
 
-	simulated_meas_start();
+	// simulated_meas_start();
 
-	advertising_start(erase_bonds);
+	// advertising_start(erase_bonds);
+
+	err = storage_init();
+	if (err) {
+		// LOG_ERR("storage init failed, err %d", err);
+	}
 
 idle:
 	while (true) {
