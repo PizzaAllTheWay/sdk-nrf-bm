@@ -150,7 +150,16 @@ static void queue_process(void)
 
 		switch (cur_op.op_code) {
 		case ZMS_OP_INIT:
-			result = zms_init();
+			if ((cur_op.gc.step == ZMS_OP_WRITE_GC_BLK_MOVE) &&
+			    (cur_op.gc.blk_mv_len)) {
+				/* Garbage collection is moving data. Previous block was written,
+				 * advance data write address and move to the next block.
+				 */
+				cur_op.fs->data_wra += zms_al_size(cur_op.fs, ZMS_BLOCK_SIZE);
+				result = zms_flash_block_move(cur_op.fs);
+			} else {
+				result = zms_init();
+			}
 			break;
 
 		case ZMS_OP_WRITE:
@@ -1256,7 +1265,10 @@ static int zms_gc_prepare(struct bm_zms_fs *fs)
 {
 	int rc;
 
-	zms_sector_advance(fs, &fs->ate_wra);
+	/* At mount, ate_wra already points to the GC target sector. */
+	if (cur_op.step != ZMS_OP_INIT_GC_START) {
+		zms_sector_advance(fs, &fs->ate_wra);
+	}
 	rc = zms_get_sector_cycle(fs, fs->ate_wra, &fs->sector_cycle);
 	if (rc == -ENOENT) {
 		/* sector never used */
@@ -1951,6 +1963,7 @@ static int zms_init(void)
 		if (rc) {
 			goto end;
 		}
+		cur_op.step = ZMS_OP_INIT_GC;
 		return zms_gc(fs);
 	}
 	if (cur_op.step == ZMS_OP_INIT_GC) {
