@@ -49,6 +49,15 @@ struct bm_zms_fixture {
 
 static bool nvm_is_full;
 static bool fs_is_init;
+static int mount_result;
+
+/* Storage API that fails every write after writes_left reaches 0,
+ * without changing the storage, like a power cut.
+ * A negative writes_left means no limit.
+ */
+static const struct bm_storage_api *real_api;
+static struct bm_storage_api power_cut_api;
+static int writes_left = -1;
 
 static void wait_for_write(void)
 {
@@ -71,6 +80,7 @@ static void wait_for_mount(void)
 		k_cpu_idle();
 	}
 #endif
+	zassert_true(mount_result == 0, "bm_zms_mount call failed, res %d", mount_result);
 }
 
 static void wait_for_clear(void)
@@ -88,12 +98,11 @@ void bm_zms_test_evt_handler(const struct bm_zms_evt *evt)
 {
 	switch (evt->evt_type) {
 	case BM_ZMS_EVT_MOUNT:
+		mount_result = evt->result;
 		fs_is_init = true;
 #if defined(CONFIG_BOARD_NATIVE_SIM)
 		k_sem_give(&mount_sem);
 #endif
-		zassert_true(evt->result == 0, "bm_zms_mount call failed, res %d",
-			     evt->result);
 		break;
 	case BM_ZMS_EVT_CLEAR:
 		fs_is_init = false;
@@ -151,6 +160,14 @@ static void before(void *data)
 static void after(void *data)
 {
 	struct bm_zms_fixture *fixture = (struct bm_zms_fixture *)data;
+
+	if (fixture->config.storage_api == &power_cut_api) {
+		writes_left = -1;
+		fixture->config.storage_api = real_api;
+		/* Clear also after a failed mount, so the next tests start from empty storage. */
+		fixture->fs.init_flags.initialized = true;
+		fs_is_init = true;
+	}
 
 	/* Clear BM_ZMS */
 	if (fs_is_init) {
@@ -821,5 +838,91 @@ ZTEST_F(bm_zms, test_zms_gc_move_blocks)
 			zassert_mem_equal(wr_buf, rd_buf, sizeof(rd_buf), "write %d: ID %d changed",
 					  i, id);
 		}
+	}
+}
+
+static int power_cut_write(const struct bm_storage *storage, uint32_t dest, const void *src,
+			   uint32_t len, void *ctx)
+{
+	if (writes_left == 0) {
+		struct bm_storage_evt evt = {
+			.id = BM_STORAGE_EVT_WRITE_RESULT,
+			.result = -EIO,
+			.ctx = ctx,
+		};
+
+		bm_storage_evt_dispatch(storage, &evt);
+		return 0;
+	}
+	if (writes_left > 0) {
+		writes_left--;
+	}
+	return real_api->write(storage, dest, src, len, ctx);
+}
+
+/*
+ * Test that mount finishes GC that a power cut stopped, and that no entry is lost.
+ */
+ZTEST_F(bm_zms, test_zms_gc_power_cut)
+{
+	int err;
+	ssize_t len;
+	/* Above 32 bytes, so GC moves each entry in more than one block. */
+	uint8_t wr_buf[104];
+	uint8_t rd_buf[104];
+	/* IDs 1 to moved_count are written once, so GC must move them. */
+	const uint32_t moved_count = 5;
+	/* Rewritten until the next write must run GC. */
+	const uint32_t rewrite_id = 10;
+
+	real_api = fixture->config.storage_api;
+	power_cut_api = *real_api;
+	power_cut_api.write = power_cut_write;
+	fixture->config.storage_api = &power_cut_api;
+
+	err = bm_zms_mount(&fixture->fs, &fixture->config);
+	wait_for_mount();
+	zassert_true(err == 0, "bm_zms_mount call failure");
+
+	/* Each moved ID is filled with its own ID value. */
+	for (uint32_t id = 1; id <= moved_count; id++) {
+		memset(wr_buf, id, sizeof(wr_buf));
+		len = bm_zms_write(&fixture->fs, id, wr_buf, sizeof(wr_buf));
+		wait_for_write();
+		zassert_equal(len, sizeof(wr_buf), "bm_zms_write failed");
+	}
+
+	/* Fill the storage until the next write must run GC. */
+	memset(wr_buf, 0xAA, sizeof(wr_buf));
+	while ((fixture->fs.ate_wra >> ADDR_SECT_SHIFT) != TEST_SECTOR_COUNT - 2) {
+		len = bm_zms_write(&fixture->fs, rewrite_id, wr_buf, sizeof(wr_buf));
+		wait_for_write();
+		zassert_equal(len, sizeof(wr_buf), "bm_zms_write failed");
+	}
+	while ((fixture->fs.ate_wra - fixture->fs.data_wra) >=
+	       (sizeof(wr_buf) + 3 * fixture->fs.ate_size)) {
+		len = bm_zms_write(&fixture->fs, rewrite_id, wr_buf, sizeof(wr_buf));
+		wait_for_write();
+		zassert_equal(len, sizeof(wr_buf), "bm_zms_write failed");
+	}
+
+	/* Cut the power while GC moves the entries. */
+	writes_left = 10;
+	bm_zms_write(&fixture->fs, rewrite_id, wr_buf, sizeof(wr_buf));
+	wait_for_write();
+
+	/* Reboot. A mount that finishes GC needs about 40 writes. */
+	writes_left = 200;
+	memset(&fixture->fs, 0, sizeof(fixture->fs));
+	err = bm_zms_mount(&fixture->fs, &fixture->config);
+	wait_for_mount();
+	zassert_true(err == 0, "bm_zms_mount call failure");
+	writes_left = -1;
+
+	for (uint32_t id = 1; id <= moved_count; id++) {
+		memset(wr_buf, id, sizeof(wr_buf));
+		len = bm_zms_read(&fixture->fs, id, rd_buf, sizeof(rd_buf));
+		zassert_equal(len, sizeof(rd_buf), "ID %d read %d bytes", id, len);
+		zassert_mem_equal(wr_buf, rd_buf, sizeof(rd_buf), "ID %d changed", id);
 	}
 }
