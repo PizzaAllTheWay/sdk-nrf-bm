@@ -1590,7 +1590,7 @@ ate_copy:
 	if (cur_op.gc.step == ZMS_OP_WRITE_GC_ATE_COPY) {
 		/* data write (if needed) succeeded, increment data_wra */
 		if (cur_op.ate_entry.len > ZMS_DATA_IN_ATE_SIZE) {
-			uint64_t data_wra_add = zms_al_size(fs, cur_op.ate_entry.len);
+			uint64_t data_wra_add = zms_al_size(fs, ZMS_BLOCK_SIZE);
 
 			fs->data_wra += data_wra_add;
 
